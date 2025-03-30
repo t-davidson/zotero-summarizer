@@ -385,97 +385,140 @@ app.post('/api/openai/assistant', async (req, res) => {
     
     console.log(`Working with ${fileIds.length} files:`, fileIds);
     
-    // Process files and create/update assistant
     try {
-      // Check for cached file IDs
-      const existingFileIds = Object.values(openaiCache.fileIds);
-      console.log(`Already cached file IDs: ${existingFileIds.length > 0 ? existingFileIds.join(', ') : 'None'}`);
+      // Simple approach: directly create or update assistant, and attach files
+      console.log("Using direct file attachment to assistant approach");
       
-      // All files will be attached to the assistant directly
-      console.log(`Proceeding with ${fileIds.length} files for the assistant`);
-      
-      // Create or update the assistant
+      // Create or update the assistant and attach files directly
       if (assistantId) {
-        // Update existing assistant
-        console.log(`Updating assistant ${assistantId}`);
-        
-        // First update the assistant properties
-        assistant = await openai.beta.assistants.update(assistantId, {
-          name,
-          instructions,
-          tools: [{ type: "file_search" }],
-          model: "gpt-4o"
-        });
-        
-        console.log(`Updated assistant ${assistant.id}`);
-        
-        // Remove any existing files first
         try {
-          console.log('Checking for existing files on assistant');
-          const assistantFiles = await openai.beta.assistants.files.list(assistantId);
-          console.log(`Found ${assistantFiles.data.length} existing files on assistant`);
+          // Check if the assistant exists
+          assistant = await openai.beta.assistants.retrieve(assistantId);
+          console.log(`Retrieved existing assistant ${assistantId}`);
           
-          // Delete each file
-          for (const file of assistantFiles.data) {
+          // Update the assistant properties
+          assistant = await openai.beta.assistants.update(assistantId, {
+            name,
+            instructions,
+            tools: [{ type: "file_search" }],
+            model: "gpt-4o"
+          });
+          
+          console.log(`Updated assistant ${assistant.id}`);
+          
+          // Get existing files
+          const existingFiles = await openai.beta.assistants.files.list(assistantId);
+          console.log(`Assistant has ${existingFiles.data.length} files currently attached`);
+          
+          // Remove existing files
+          for (const file of existingFiles.data) {
             console.log(`Removing file ${file.id} from assistant`);
-            await openai.beta.assistants.files.del(assistantId, file.id);
+            try {
+              await openai.beta.assistants.files.del(assistantId, file.id);
+            } catch (delErr) {
+              console.error(`Error removing file ${file.id}:`, delErr);
+            }
           }
-        } catch (fileErr) {
-          console.error('Error handling assistant files:', fileErr);
+        } catch (err) {
+          console.log(`Error with existing assistant, will create new one: ${err.message}`);
+          assistantId = null;
         }
-      } else {
-        // Create new assistant
+      }
+      
+      // Create a new assistant if needed
+      if (!assistantId) {
         console.log(`Creating new assistant`);
         
-        // Create the assistant with basic properties
+        // Create the assistant 
         assistant = await openai.beta.assistants.create({
           name,
           instructions,
           tools: [{ type: "file_search" }],
           model: "gpt-4o"
         });
+        
+        assistantId = assistant.id;
+        console.log(`Created new assistant ${assistant.id}`);
+        
+        // Cache the assistant ID
+        openaiCache.assistantId = assistantId;
       }
       
-      // Now attach files directly to the assistant
-      console.log(`Attaching ${fileIds.length} files to assistant ${assistant.id}`);
+      // Attach files to the assistant
+      console.log(`Attaching ${fileIds.length} files to assistant ${assistantId}`);
       
-      // Attach files one by one
+      // Track successful attachments
+      const successfulAttachments = [];
+      
+      // Attach each file
       for (const fileId of fileIds) {
         try {
-          console.log(`Attaching file ${fileId} to assistant`);
-          await openai.beta.assistants.files.create(assistant.id, {
-            file_id: fileId
-          });
-          console.log(`Successfully attached file ${fileId}`);
+          console.log(`Attaching file ${fileId}`);
+          
+          // Special handling: Use the API directly in case the beta.assistants.files.create is not working
+          const url = `https://api.openai.com/v1/assistants/${assistantId}/files`;
+          const response = await axios.post(url, 
+            { file_id: fileId },
+            { 
+              headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                'OpenAI-Beta': 'assistants=v1'
+              }
+            }
+          );
+          
+          if (response.status === 200) {
+            console.log(`Successfully attached file ${fileId}`);
+            successfulAttachments.push(fileId);
+          } else {
+            console.error(`Failed to attach file ${fileId}: ${response.statusText}`);
+          }
         } catch (attachErr) {
-          console.error(`Error attaching file ${fileId}:`, attachErr);
+          console.error(`Error attaching file ${fileId}:`, attachErr.message);
+          
+          // Try fallback approach
+          try {
+            console.log(`Trying alternative approach for file ${fileId}`);
+            await openai.beta.assistants.files.create(assistantId, { file_id: fileId });
+            console.log(`Successfully attached file ${fileId} using beta API`);
+            successfulAttachments.push(fileId);
+          } catch (altErr) {
+            console.error(`Alternative approach also failed for ${fileId}:`, altErr.message);
+          }
         }
       }
       
-      console.log(`Finished setting up assistant ${assistant.id}`);
+      console.log(`Successfully attached ${successfulAttachments.length} of ${fileIds.length} files`);
       
-      // Cache the assistant ID
-      openaiCache.assistantId = assistant.id;
+      // Refetch the assistant to get latest details
+      assistant = await openai.beta.assistants.retrieve(assistantId);
       
-      // Add file info to response
-      assistant.file_count = fileIds.length;
-      assistant.file_ids = fileIds;
+      // Add file info to response based on successful attachments
+      assistant.file_count = successfulAttachments.length;
+      assistant.file_ids = successfulAttachments;
       
-      // Verify files were attached
+      // Try to verify the files are attached
       try {
-        const attachedFiles = await openai.beta.assistants.files.list(assistant.id);
-        console.log(`Verified ${attachedFiles.data.length} files attached to assistant ${assistant.id}`);
+        // Get the files currently attached to the assistant
+        const assistantFiles = await openai.beta.assistants.files.list(assistantId);
+        console.log(`Verified ${assistantFiles.data.length} files attached to assistant ${assistantId}`);
         
-        // Update the file count with actual attached files
-        assistant.file_count = attachedFiles.data.length;
-        assistant.attached_files = attachedFiles.data.map(file => file.id);
+        // Update the response with actual files attached
+        assistant.file_count = assistantFiles.data.length;
+        assistant.attached_files = assistantFiles.data.map(file => file.id);
+        
+        if (assistantFiles.data.length !== successfulAttachments.length) {
+          console.warn(`Warning: Expected ${successfulAttachments.length} files, found ${assistantFiles.data.length}`);
+        }
       } catch (verifyErr) {
-        console.error('Error verifying attached files:', verifyErr);
+        console.error('Error verifying files:', verifyErr.message);
+        // Keep the counts we already have
       }
       
-    } catch (vectorErr) {
-      console.error('Error with vector store operations:', vectorErr);
-      throw vectorErr;
+    } catch (err) {
+      console.error('Error with assistant operations:', err);
+      throw err;
     }
     
     res.json(assistant);
