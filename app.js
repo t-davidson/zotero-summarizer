@@ -84,11 +84,10 @@ const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
 });
 
-// Cache for OpenAI file IDs, assistant ID, and vector store ID
+// Cache for OpenAI file IDs and assistant ID
 let openaiCache = {
   fileIds: {},
-  assistantId: null,
-  vectorStoreId: null
+  assistantId: null
 };
 
 // Zotero API configuration
@@ -382,121 +381,97 @@ app.post('/api/openai/assistant', async (req, res) => {
     }
     
     let assistantId = openaiCache.assistantId;
-    let vectorStoreId = openaiCache.vectorStoreId;
     let assistant;
     
     console.log(`Working with ${fileIds.length} files:`, fileIds);
     
-    // Step 1: Create or use existing vector store
+    // Process files and create/update assistant
     try {
-      if (!vectorStoreId) {
-        console.log('Creating new vector store');
-        // Create a new vector store for the files
-        const vectorStore = await openai.vectorStores.create({
-          name: `Zotero Document Store ${new Date().toISOString()}`
-          // Removed expires_after parameter as it's causing errors
-        });
-        
-        vectorStoreId = vectorStore.id;
-        openaiCache.vectorStoreId = vectorStoreId;
-        console.log(`Created vector store: ${vectorStoreId}`);
-      } else {
-        console.log(`Using existing vector store: ${vectorStoreId}`);
-      }
+      // Check for cached file IDs
+      const existingFileIds = Object.values(openaiCache.fileIds);
+      console.log(`Already cached file IDs: ${existingFileIds.length > 0 ? existingFileIds.join(', ') : 'None'}`);
       
-      // Step 2: Add files to the vector store if needed
-      const existingFiles = [];
+      // All files will be attached to the assistant directly
+      console.log(`Proceeding with ${fileIds.length} files for the assistant`);
       
-      try {
-        // Get file batches to see what's already in the vector store
-        const fileBatches = await openai.vectorStores.fileBatches.list(vectorStoreId);
-        console.log(`Vector store has ${fileBatches.data.length} file batches`);
-        
-        // Collect all file IDs already in the store
-        for (const batch of fileBatches.data) {
-          for (const file of batch.file_ids) {
-            existingFiles.push(file);
-          }
-        }
-        console.log(`Vector store has these files: ${existingFiles.join(', ')}`);
-      } catch (listErr) {
-        console.error('Error listing file batches:', listErr);
-      }
-      
-      // Filter out files that are already in the vector store
-      const newFileIds = fileIds.filter(id => !existingFiles.includes(id));
-      console.log(`Adding ${newFileIds.length} new files to vector store`);
-      
-      if (newFileIds.length > 0) {
-        // Add new files to the vector store
-        const fileBatch = await openai.vectorStores.fileBatches.create(vectorStoreId, {
-          file_ids: newFileIds
-        });
-        
-        console.log(`Created file batch ${fileBatch.id} with ${newFileIds.length} files`);
-        
-        // Poll until processing is complete
-        let batchStatus = await openai.vectorStores.fileBatches.retrieve(vectorStoreId, fileBatch.id);
-        while (batchStatus.status === 'in_progress') {
-          console.log('File batch still processing, waiting...');
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          batchStatus = await openai.vectorStores.fileBatches.retrieve(vectorStoreId, fileBatch.id);
-        }
-        
-        console.log(`File batch status: ${batchStatus.status}`);
-        
-        if (batchStatus.status === 'failed') {
-          console.error('File batch processing failed:', batchStatus.error);
-          throw new Error(`File batch processing failed: ${batchStatus.error?.message || 'Unknown error'}`);
-        }
-      }
-      
-      // Step 3: Create or update the assistant with the vector store
+      // Create or update the assistant
       if (assistantId) {
         // Update existing assistant
-        console.log(`Updating assistant ${assistantId} with vector store ${vectorStoreId}`);
+        console.log(`Updating assistant ${assistantId}`);
         
-        // Update the assistant properties and connect to vector store
+        // First update the assistant properties
         assistant = await openai.beta.assistants.update(assistantId, {
           name,
           instructions,
           tools: [{ type: "file_search" }],
-          model: "gpt-4o",
-          tool_resources: {
-            file_search: {
-              vector_store_ids: [vectorStoreId]
-            }
-          }
+          model: "gpt-4o"
         });
         
-        console.log(`Updated assistant ${assistant.id} with vector store ${vectorStoreId}`);
+        console.log(`Updated assistant ${assistant.id}`);
+        
+        // Remove any existing files first
+        try {
+          console.log('Checking for existing files on assistant');
+          const assistantFiles = await openai.beta.assistants.files.list(assistantId);
+          console.log(`Found ${assistantFiles.data.length} existing files on assistant`);
+          
+          // Delete each file
+          for (const file of assistantFiles.data) {
+            console.log(`Removing file ${file.id} from assistant`);
+            await openai.beta.assistants.files.del(assistantId, file.id);
+          }
+        } catch (fileErr) {
+          console.error('Error handling assistant files:', fileErr);
+        }
       } else {
         // Create new assistant
-        console.log(`Creating new assistant with vector store ${vectorStoreId}`);
+        console.log(`Creating new assistant`);
         
-        // Create the assistant with connection to vector store
+        // Create the assistant with basic properties
         assistant = await openai.beta.assistants.create({
           name,
           instructions,
           tools: [{ type: "file_search" }],
-          model: "gpt-4o",
-          tool_resources: {
-            file_search: {
-              vector_store_ids: [vectorStoreId]
-            }
-          }
+          model: "gpt-4o"
         });
-        
-        console.log(`Created assistant ${assistant.id} with vector store ${vectorStoreId}`);
-        
-        // Cache the assistant ID
-        openaiCache.assistantId = assistant.id;
       }
       
+      // Now attach files directly to the assistant
+      console.log(`Attaching ${fileIds.length} files to assistant ${assistant.id}`);
+      
+      // Attach files one by one
+      for (const fileId of fileIds) {
+        try {
+          console.log(`Attaching file ${fileId} to assistant`);
+          await openai.beta.assistants.files.create(assistant.id, {
+            file_id: fileId
+          });
+          console.log(`Successfully attached file ${fileId}`);
+        } catch (attachErr) {
+          console.error(`Error attaching file ${fileId}:`, attachErr);
+        }
+      }
+      
+      console.log(`Finished setting up assistant ${assistant.id}`);
+      
+      // Cache the assistant ID
+      openaiCache.assistantId = assistant.id;
+      
       // Add file info to response
-      assistant.vector_store_id = vectorStoreId;
       assistant.file_count = fileIds.length;
       assistant.file_ids = fileIds;
+      
+      // Verify files were attached
+      try {
+        const attachedFiles = await openai.beta.assistants.files.list(assistant.id);
+        console.log(`Verified ${attachedFiles.data.length} files attached to assistant ${assistant.id}`);
+        
+        // Update the file count with actual attached files
+        assistant.file_count = attachedFiles.data.length;
+        assistant.attached_files = attachedFiles.data.map(file => file.id);
+      } catch (verifyErr) {
+        console.error('Error verifying attached files:', verifyErr);
+      }
       
     } catch (vectorErr) {
       console.error('Error with vector store operations:', vectorErr);
