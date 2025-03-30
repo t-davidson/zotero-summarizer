@@ -22,7 +22,8 @@
                     </svg>
                     Refresh Library
                 </button>
-                <button id="settings-btn" class="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 flex items-center gap-2">
+                <!-- Settings button hidden since we use env vars now -->
+                <button id="settings-btn" class="hidden bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 flex items-center gap-2">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -45,7 +46,7 @@
                         <ul id="collections-list" class="space-y-1 max-h-60 overflow-y-auto">
                             <!-- Collections will be added here -->
                             <li class="flex items-center justify-center py-8 text-gray-400">
-                                Enter your Zotero credentials in Settings
+                                Loading collections...
                             </li>
                         </ul>
                     </div>
@@ -129,40 +130,6 @@
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Modal for Settings -->
-    <div id="settings-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-        <div class="bg-white rounded-lg p-6 w-full max-w-md">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-xl font-semibold">Settings</h3>
-                <button id="close-settings" class="text-gray-500 hover:text-gray-700">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                </button>
-            </div>
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-gray-700 mb-2" for="zotero-api-key">Zotero API Key</label>
-                    <input type="password" id="zotero-api-key" class="w-full p-2 border rounded" placeholder="Enter your Zotero API key">
-                </div>
-                <div>
-                    <label class="block text-gray-700 mb-2" for="zotero-user-id">Zotero User ID</label>
-                    <input type="text" id="zotero-user-id" class="w-full p-2 border rounded" placeholder="Enter your Zotero user ID">
-                </div>
-                <div>
-                    <label class="block text-gray-700 mb-2" for="openai-api-key">OpenAI API Key</label>
-                    <input type="password" id="openai-api-key" class="w-full p-2 border rounded" placeholder="Enter your OpenAI API key">
-                </div>
-                <div class="text-sm text-gray-500 mt-2">
-                    <p>Your API keys are stored locally in your browser and are never sent to our servers.</p>
-                </div>
-            </div>
-            <div class="mt-6 flex justify-end">
-                <button id="save-settings" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Save Settings</button>
             </div>
         </div>
     </div>

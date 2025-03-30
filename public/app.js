@@ -1,3 +1,4 @@
+// public/app.js
 document.addEventListener('DOMContentLoaded', () => {
     // Elements
     const collectionsListEl = document.getElementById('collections-list');
@@ -15,16 +16,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatContainerEl = document.getElementById('chat-container');
     const chatInputEl = document.getElementById('chat-input');
     const sendMessageBtn = document.getElementById('send-message-btn');
-    const settingsBtnEl = document.getElementById('settings-btn');
-    const settingsModalEl = document.getElementById('settings-modal');
-    const closeSettingsEl = document.getElementById('close-settings');
-    const saveSettingsEl = document.getElementById('save-settings');
-    const zoteroApiKeyEl = document.getElementById('zotero-api-key');
-    const zoteroUserIdEl = document.getElementById('zotero-user-id');
-    const openaiApiKeyEl = document.getElementById('openai-api-key');
     const refreshBtnEl = document.getElementById('refresh-btn');
     const loadingOverlayEl = document.getElementById('loading-overlay');
     const loadingTextEl = document.getElementById('loading-text');
+    
+    // Hide the settings button since we're using env vars now
+    const settingsBtnEl = document.getElementById('settings-btn');
+    if (settingsBtnEl) {
+        settingsBtnEl.style.display = 'none';
+    }
 
     // State
     let state = {
@@ -34,70 +34,23 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedDocuments: [],
         assistant: null,
         currentThread: null,
-        documentFileIds: {},
-        settings: {
-            zoteroApiKey: localStorage.getItem('zoteroApiKey') || '',
-            zoteroUserId: localStorage.getItem('zoteroUserId') || '',
-            openaiApiKey: localStorage.getItem('openaiApiKey') || ''
-        }
+        documentFileIds: {}
     };
 
     // Initialize app
     function initApp() {
-        // Load settings from localStorage
-        zoteroApiKeyEl.value = state.settings.zoteroApiKey;
-        zoteroUserIdEl.value = state.settings.zoteroUserId;
-        openaiApiKeyEl.value = state.settings.openaiApiKey;
-
         // Set up event listeners
         setupEventListeners();
-
-        // If we have Zotero credentials, load collections
-        if (state.settings.zoteroApiKey && state.settings.zoteroUserId) {
-            loadCollections();
-        }
+        
+        // Load collections immediately
+        loadCollections();
     }
 
     // Set up event listeners
     function setupEventListeners() {
-        // Settings modal
-        settingsBtnEl.addEventListener('click', () => {
-            settingsModalEl.classList.remove('hidden');
-        });
-
-        closeSettingsEl.addEventListener('click', () => {
-            settingsModalEl.classList.add('hidden');
-        });
-
-        saveSettingsEl.addEventListener('click', () => {
-            const zoteroApiKey = zoteroApiKeyEl.value.trim();
-            const zoteroUserId = zoteroUserIdEl.value.trim();
-            const openaiApiKey = openaiApiKeyEl.value.trim();
-            
-            // Save to state and localStorage
-            state.settings.zoteroApiKey = zoteroApiKey;
-            state.settings.zoteroUserId = zoteroUserId;
-            state.settings.openaiApiKey = openaiApiKey;
-            
-            localStorage.setItem('zoteroApiKey', zoteroApiKey);
-            localStorage.setItem('zoteroUserId', zoteroUserId);
-            localStorage.setItem('openaiApiKey', openaiApiKey);
-            
-            settingsModalEl.classList.add('hidden');
-            
-            // Load collections with new credentials
-            if (zoteroApiKey && zoteroUserId) {
-                loadCollections();
-            }
-        });
-
         // Refresh button
         refreshBtnEl.addEventListener('click', () => {
-            if (state.settings.zoteroApiKey && state.settings.zoteroUserId) {
-                loadCollections();
-            } else {
-                showAlert('Please enter your Zotero credentials in Settings first');
-            }
+            loadCollections();
         });
 
         // Select all documents button
@@ -148,7 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 for (const doc of state.selectedDocuments) {
                     if (!state.documentFileIds[doc.id]) {
                         // Fetch the PDF from Zotero
-                        const pdfResponse = await fetch(`/api/item/${doc.key}/pdf?userId=${state.settings.zoteroUserId}&apiKey=${state.settings.zoteroApiKey}`);
+                        const pdfResponse = await fetch(`/api/item/${doc.key}/pdf`);
                         const pdfData = await pdfResponse.json();
                         
                         if (pdfResponse.ok) {
@@ -241,15 +194,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load collections from Zotero
     async function loadCollections() {
-        if (!state.settings.zoteroApiKey || !state.settings.zoteroUserId) {
-            showAlert('Please enter your Zotero credentials in Settings first');
-            return;
-        }
-        
         showLoading('Loading collections...');
         
         try {
-            const response = await fetch(`/api/collections?userId=${state.settings.zoteroUserId}&apiKey=${state.settings.zoteroApiKey}`);
+            const response = await fetch('/api/collections');
             const data = await response.json();
             
             if (response.ok) {
@@ -265,7 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Show empty collections list
             collectionsListEl.innerHTML = `
                 <li class="flex items-center justify-center py-8 text-red-500">
-                    Failed to load collections. Check your credentials.
+                    Failed to load collections. Check server logs for details.
                 </li>
             `;
         } finally {
@@ -317,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showLoading('Loading documents...');
         
         try {
-            const response = await fetch(`/api/collection/${collectionId}/items?userId=${state.settings.zoteroUserId}&apiKey=${state.settings.zoteroApiKey}`);
+            const response = await fetch(`/api/collection/${collectionId}/items`);
             const data = await response.json();
             
             if (response.ok) {
@@ -476,61 +424,6 @@ document.addEventListener('DOMContentLoaded', () => {
         
         try {
             // Add typing indicator
-            const typingIndicator = document.createElement('div');
-            typingIndicator.className = 'assistant-message chat-message';
-            typingIndicator.innerHTML = `<div class="spinner-small"></div>`;
-            chatContainerEl.appendChild(typingIndicator);
-            
-            // Scroll to bottom
-            chatContainerEl.scrollTop = chatContainerEl.scrollHeight;
-            
-            // Send to API
-            let response;
-            if (state.currentThread) {
-                // Continue existing thread
-                response = await fetch('/api/openai/continue', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        prompt: message,
-                        threadId: state.currentThread,
-                        assistantId: state.assistant.id
-                    })
-                });
-            } else {
-                // Start new thread
-                response = await fetch('/api/openai/query', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        prompt: message,
-                        assistantId: state.assistant.id
-                    })
-                });
-            }
-            
-            const data = await response.json();
-            
-            // Remove typing indicator
-            chatContainerEl.removeChild(typingIndicator);
-            
-            if (response.ok) {
-                // Save thread ID for continued conversation
-                state.currentThread = data.threadId;
-                
-                // Add assistant response to chat
-                appendMessage(data.message, 'assistant');
-            } else {
-                throw new Error(`Failed to get response: ${data.error}`);
-            }
-        } catch (error) {
-            console.error('Error sending message:', error);
-            
-            // Remove typing indicator if it exists
             const typingIndicator = document.querySelector('.spinner-small')?.parentElement;
             if (typingIndicator) {
                 chatContainerEl.removeChild(typingIndicator);
@@ -596,4 +489,59 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Initialize the app
-    initApp();
+    initApp(); = document.createElement('div');
+            typingIndicator.className = 'assistant-message chat-message';
+            typingIndicator.innerHTML = `<div class="spinner-small"></div>`;
+            chatContainerEl.appendChild(typingIndicator);
+            
+            // Scroll to bottom
+            chatContainerEl.scrollTop = chatContainerEl.scrollHeight;
+            
+            // Send to API
+            let response;
+            if (state.currentThread) {
+                // Continue existing thread
+                response = await fetch('/api/openai/continue', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        prompt: message,
+                        threadId: state.currentThread,
+                        assistantId: state.assistant.id
+                    })
+                });
+            } else {
+                // Start new thread
+                response = await fetch('/api/openai/query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        prompt: message,
+                        assistantId: state.assistant.id
+                    })
+                });
+            }
+            
+            const data = await response.json();
+            
+            // Remove typing indicator
+            chatContainerEl.removeChild(typingIndicator);
+            
+            if (response.ok) {
+                // Save thread ID for continued conversation
+                state.currentThread = data.threadId;
+                
+                // Add assistant response to chat
+                appendMessage(data.message, 'assistant');
+            } else {
+                throw new Error(`Failed to get response: ${data.error}`);
+            }
+        } catch (error) {
+            console.error('Error sending message:', error);
+            
+            // Remove typing indicator if it exists
+            const typingIndicator

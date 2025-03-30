@@ -4,12 +4,32 @@ const path = require('path');
 const axios = require('axios');
 const OpenAI = require('openai');
 const fs = require('fs');
-const FormData = require('form-data');
 const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Environment variables
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const ZOTERO_API_KEY = process.env.ZOTERO_API_KEY;
+const ZOTERO_USER_ID = process.env.ZOTERO_USER_ID;
+
+// Check required environment variables
+if (!OPENAI_API_KEY) {
+  console.error('Error: OPENAI_API_KEY is required in .env file');
+  process.exit(1);
+}
+
+if (!ZOTERO_API_KEY) {
+  console.error('Error: ZOTERO_API_KEY is required in .env file');
+  process.exit(1);
+}
+
+if (!ZOTERO_USER_ID) {
+  console.error('Error: ZOTERO_USER_ID is required in .env file');
+  process.exit(1);
+}
 
 // Middleware
 app.use(express.json());
@@ -19,7 +39,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Initialize OpenAI client
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: OPENAI_API_KEY,
 });
 
 // Cache for OpenAI file IDs and assistant ID
@@ -32,23 +52,15 @@ let openaiCache = {
 const zoteroConfig = {
   baseUrl: 'https://api.zotero.org',
   headers: {
-    'Zotero-API-Version': '3'
+    'Zotero-API-Version': '3',
+    'Authorization': `Bearer ${ZOTERO_API_KEY}`
   }
 };
 
 // Get Zotero collections
 app.get('/api/collections', async (req, res) => {
   try {
-    const userId = req.query.userId;
-    const apiKey = req.query.apiKey;
-    
-    if (!userId || !apiKey) {
-      return res.status(400).json({ error: 'Zotero user ID and API key are required' });
-    }
-    
-    zoteroConfig.headers['Authorization'] = `Bearer ${apiKey}`;
-    
-    const response = await axios.get(`${zoteroConfig.baseUrl}/users/${userId}/collections`, {
+    const response = await axios.get(`${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/collections`, {
       headers: zoteroConfig.headers
     });
     
@@ -63,17 +75,10 @@ app.get('/api/collections', async (req, res) => {
 app.get('/api/collection/:collectionId/items', async (req, res) => {
   try {
     const { collectionId } = req.params;
-    const { userId, apiKey } = req.query;
-    
-    if (!userId || !apiKey) {
-      return res.status(400).json({ error: 'Zotero user ID and API key are required' });
-    }
-    
-    zoteroConfig.headers['Authorization'] = `Bearer ${apiKey}`;
     
     // Get collection items
     const response = await axios.get(
-      `${zoteroConfig.baseUrl}/users/${userId}/collections/${collectionId}/items`, {
+      `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/collections/${collectionId}/items`, {
         headers: zoteroConfig.headers,
         params: { format: 'json', include: 'data,meta' }
       }
@@ -97,29 +102,22 @@ app.get('/api/collection/:collectionId/items', async (req, res) => {
 app.get('/api/item/:itemKey/pdf', async (req, res) => {
   try {
     const { itemKey } = req.params;
-    const { userId, apiKey } = req.query;
-    
-    if (!userId || !apiKey) {
-      return res.status(400).json({ error: 'Zotero user ID and API key are required' });
-    }
-    
-    zoteroConfig.headers['Authorization'] = `Bearer ${apiKey}`;
     
     // First, check if the item is itself a PDF or get its attachments
     let pdfUrl;
     
     const itemResponse = await axios.get(
-      `${zoteroConfig.baseUrl}/users/${userId}/items/${itemKey}`, {
+      `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${itemKey}`, {
         headers: zoteroConfig.headers
       }
     );
     
     if (itemResponse.data.data.contentType === 'application/pdf') {
-      pdfUrl = `${zoteroConfig.baseUrl}/users/${userId}/items/${itemKey}/file`;
+      pdfUrl = `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${itemKey}/file`;
     } else {
       // Get attachments for this item
       const attachmentsResponse = await axios.get(
-        `${zoteroConfig.baseUrl}/users/${userId}/items/${itemKey}/children`, {
+        `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${itemKey}/children`, {
           headers: zoteroConfig.headers
         }
       );
@@ -130,7 +128,7 @@ app.get('/api/item/:itemKey/pdf', async (req, res) => {
       );
       
       if (pdfAttachment) {
-        pdfUrl = `${zoteroConfig.baseUrl}/users/${userId}/items/${pdfAttachment.data.key}/file`;
+        pdfUrl = `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${pdfAttachment.data.key}/file`;
       } else {
         return res.status(404).json({ error: 'No PDF attachment found for this item' });
       }
@@ -142,7 +140,7 @@ app.get('/api/item/:itemKey/pdf', async (req, res) => {
       responseType: 'arraybuffer'
     });
     
-    // Save the PDF temporarily (you might want to implement a cleanup strategy for these)
+    // Save the PDF temporarily
     const tempFilePath = path.join(__dirname, 'temp', `${itemKey}.pdf`);
     fs.mkdirSync(path.join(__dirname, 'temp'), { recursive: true });
     fs.writeFileSync(tempFilePath, pdfResponse.data);
@@ -329,7 +327,25 @@ app.post('/api/openai/continue', async (req, res) => {
   }
 });
 
+// Cleanup temp files when the server exits
+process.on('exit', () => {
+  const tempDir = path.join(__dirname, 'temp');
+  if (fs.existsSync(tempDir)) {
+    const files = fs.readdirSync(tempDir);
+    files.forEach(file => {
+      if (file !== '.gitkeep') {
+        try {
+          fs.unlinkSync(path.join(tempDir, file));
+        } catch (error) {
+          console.error(`Failed to delete temp file ${file}: ${error.message}`);
+        }
+      }
+    });
+  }
+});
+
 // Start the server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Using Zotero account with User ID: ${ZOTERO_USER_ID}`);
 });
