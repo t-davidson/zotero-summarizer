@@ -1,6 +1,2 @@
-# Ignore .env file
-.env
-
-# Ignore npm files
-node_modules/*
-package-lock.json
+logs/*
+!logs/.gitkeep

@@ -7,19 +7,73 @@
     animation: spin 1s linear infinite;
 }
 
+.spinner-small {
+    border: 2px solid rgba(0, 0, 0, 0.1);
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border-left-color: #3b82f6;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+    margin-right: 6px;
+}
+
+/* Progress bar styles */
+.progress-container {
+    width: 100%;
+    background-color: #e5e7eb;
+    border-radius: 0.5rem;
+    margin: 1rem 0;
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 0.75rem;
+    background-color: #3b82f6;
+    border-radius: 0.5rem;
+    transition: width 0.3s ease;
+    position: relative;
+}
+
+.progress-bar.success {
+    background-color: #10b981;
+}
+
+.progress-bar.warning {
+    background-color: #f59e0b;
+}
+
+.progress-bar.error {
+    background-color: #ef4444;
+}
+
+.progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: #4b5563;
+    margin-bottom: 0.25rem;
+}
+
 @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
 }
 
+.collection-item {
+    transition: all 0.2s ease-in-out;
+}
+
 .collection-item:hover {
-    background-color: #f3f4f6;
+    background-color: #dbeafe;
     cursor: pointer;
+    transform: translateX(2px);
 }
 
 .collection-item.active {
-    background-color: #e5e7eb;
+    background-color: #bfdbfe;
     border-left: 4px solid #3b82f6;
+    font-weight: 600;
 }
 
 .document-item {

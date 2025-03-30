@@ -136,9 +136,45 @@
     
     <!-- Loading Overlay -->
     <div id="loading-overlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-        <div class="bg-white p-6 rounded-lg shadow-lg flex flex-col items-center">
+        <div class="bg-white p-6 rounded-lg shadow-lg flex flex-col items-center" style="min-width: 400px;">
             <div class="spinner mb-4"></div>
-            <p id="loading-text" class="text-gray-700">Loading...</p>
+            <p id="loading-text" class="text-gray-700 mb-2">Loading...</p>
+            
+            <!-- Progress Container (hidden by default) -->
+            <div id="progress-container" class="w-full hidden">
+                <!-- Progress Step 1: Downloading PDFs -->
+                <div id="download-progress-container" class="mb-4 hidden">
+                    <div class="progress-label">
+                        <span>Downloading PDFs</span>
+                        <span id="download-progress-text">0/0</span>
+                    </div>
+                    <div class="progress-container">
+                        <div id="download-progress-bar" class="progress-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <!-- Progress Step 2: Uploading to OpenAI -->
+                <div id="upload-progress-container" class="mb-4 hidden">
+                    <div class="progress-label">
+                        <span>Uploading to OpenAI</span>
+                        <span id="upload-progress-text">0/0</span>
+                    </div>
+                    <div class="progress-container">
+                        <div id="upload-progress-bar" class="progress-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <!-- Progress Step 3: Creating Assistant -->
+                <div id="assistant-progress-container" class="mb-4 hidden">
+                    <div class="progress-label">
+                        <span>Creating Assistant</span>
+                        <span id="assistant-progress-text">Initializing...</span>
+                    </div>
+                    <div class="progress-container">
+                        <div id="assistant-progress-bar" class="progress-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
