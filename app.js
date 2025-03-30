@@ -119,24 +119,99 @@ app.get('/api/collection/:collectionId/items', async (req, res) => {
   try {
     const { collectionId } = req.params;
     
-    // Get collection items
-    const response = await axios.get(
-      `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/collections/${collectionId}/items?top=1`, {
-        headers: zoteroConfig.headers,
-        params: { format: 'json', include: 'data' }
+    console.log(`Fetching items from collection ${collectionId}`);
+    
+    // Function to fetch a page of items
+    async function fetchItemsPage(start = 0) {
+      return axios.get(
+        `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/collections/${collectionId}/items`, {
+          headers: zoteroConfig.headers,
+          params: { 
+            format: 'json', 
+            include: 'data',
+            limit: 100,
+            start
+          }
+        }
+      );
+    }
+    
+    // Get the first page of items
+    const firstPageResponse = await fetchItemsPage();
+    let allItems = firstPageResponse.data;
+    
+    // Check if there are more items to fetch (using Link header)
+    const linkHeader = firstPageResponse.headers.link;
+    if (linkHeader && linkHeader.includes('rel="next"')) {
+      // Extract total count from Link header if available
+      console.log('Pagination detected in collection response');
+      
+      // Get total item count from header or make estimate
+      let totalItems = 0;
+      if (firstPageResponse.headers['total-results']) {
+        totalItems = parseInt(firstPageResponse.headers['total-results']);
+        console.log(`Collection has ${totalItems} total items`);
+      } else {
+        // Estimate based on first page
+        totalItems = Math.max(200, allItems.length * 2); // Assume at least 2 pages
+        console.log(`Estimating collection has at least ${totalItems} items`);
       }
-    );
+      
+      // Fetch remaining pages in parallel
+      const remainingPageCount = Math.ceil((totalItems - allItems.length) / 100);
+      console.log(`Fetching ${remainingPageCount} additional pages`);
+      
+      const pagePromises = [];
+      for (let i = 1; i <= remainingPageCount; i++) {
+        pagePromises.push(fetchItemsPage(i * 100));
+      }
+      
+      const pageResponses = await Promise.all(pagePromises);
+      for (const pageResponse of pageResponses) {
+        allItems = allItems.concat(pageResponse.data);
+      }
+      
+      console.log(`Total ${allItems.length} items fetched`);
+    }
     
     // Keep academic items that are likely papers, books, etc.
-    const academicItems = response.data.filter(item => {
-      return item.data.itemType === 'journalArticle' || 
-             item.data.itemType === 'book' || 
-             item.data.itemType === 'document' ||
-             item.data.itemType === 'report' ||
-             item.data.itemType === 'conferencePaper' ||
-             item.data.itemType === 'thesis' ||
-             item.data.itemType === 'bookSection';
+    const academicItems = allItems.filter(item => {
+      // Include all common academic item types
+      const academicTypes = [
+        'journalArticle',
+        'book',
+        'bookSection',
+        'document',
+        'report',
+        'conferencePaper',
+        'thesis',
+        'manuscript',
+        'preprint',
+        'blogPost',
+        'webpage',
+        'magazineArticle',
+        'newspaperArticle',
+        'letter',
+        'interview',
+        'presentation',
+        'audioRecording',
+        'videoRecording',
+        'podcast',
+        'case',
+        'statute',
+        'bill',
+        'hearing',
+        'patent',
+        'map'
+      ];
+      
+      // Include all academic items
+      return academicTypes.includes(item.data.itemType) || 
+             // Also include parent items that might have PDF attachments
+             (item.meta && item.meta.numChildren && item.meta.numChildren > 0);
     });
+    
+    console.log(`Found ${academicItems.length} academic items out of ${allItems.length} total items`);
     
     // For each item, check if it has PDF attachments
     const enhancedItems = await Promise.all(academicItems.map(async (item) => {
