@@ -84,11 +84,37 @@ const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
 });
 
-// Cache for OpenAI file IDs, assistant ID, and vector store ID
+// Cache for OpenAI file IDs, assistant ID, vector store ID, and threads
 let openaiCache = {
   fileIds: {},
   assistantId: null,
-  vectorStoreId: null
+  vectorStoreId: null,
+  // Thread management
+  threads: {},  // Map: assistantId -> { threadId, lastAccessed, created }
+  
+  // Get a thread for an assistant
+  getThread: function(assistantId) {
+    return this.threads[assistantId];
+  },
+  
+  // Save a thread for an assistant
+  saveThread: function(assistantId, threadId) {
+    this.threads[assistantId] = { 
+      threadId, 
+      lastAccessed: Date.now(),
+      created: Date.now() 
+    };
+    return this.threads[assistantId];
+  },
+  
+  // Update thread last accessed time
+  updateThreadAccess: function(assistantId) {
+    if (this.threads[assistantId]) {
+      this.threads[assistantId].lastAccessed = Date.now();
+      return true;
+    }
+    return false;
+  }
 };
 
 // Zotero API configuration
@@ -556,39 +582,121 @@ app.post('/api/openai/query', async (req, res) => {
       return res.status(400).json({ error: 'Prompt and assistant ID are required' });
     }
     
-    // Create a thread
-    const thread = await openai.beta.threads.create();
+    console.log(`Starting new conversation with assistant ${assistantId}`);
+    
+    // Check if we have an existing thread for this assistant
+    let thread;
+    const existingThread = openaiCache.getThread(assistantId);
+    
+    if (existingThread) {
+      // Try to validate the existing thread
+      try {
+        console.log(`Found existing thread ${existingThread.threadId} for assistant ${assistantId}, validating...`);
+        thread = await openai.beta.threads.retrieve(existingThread.threadId);
+        console.log(`Using existing thread ${thread.id}`);
+        // Update last accessed time
+        openaiCache.updateThreadAccess(assistantId);
+      } catch (threadError) {
+        console.error(`Existing thread ${existingThread.threadId} is no longer valid:`, threadError.message);
+        // Create a new thread if the existing one is invalid
+        thread = await openai.beta.threads.create();
+        console.log(`Created new thread ${thread.id} to replace invalid thread`);
+        // Save the new thread
+        openaiCache.saveThread(assistantId, thread.id);
+      }
+    } else {
+      // Create a new thread
+      thread = await openai.beta.threads.create();
+      console.log(`Created new thread ${thread.id}`);
+      // Save the thread
+      openaiCache.saveThread(assistantId, thread.id);
+    }
     
     // Add a message to the thread
-    await openai.beta.threads.messages.create(thread.id, {
+    const message = await openai.beta.threads.messages.create(thread.id, {
       role: "user",
       content: prompt
     });
+    
+    console.log(`Added message to thread ${thread.id}, message ID: ${message.id}`);
     
     // Run the assistant
     const run = await openai.beta.threads.runs.create(thread.id, {
       assistant_id: assistantId
     });
     
-    // Poll for the run to complete
-    let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    console.log(`Started run ${run.id} on thread ${thread.id}`);
     
-    // Wait for the run to complete (in a real app, you might want to implement a webhook instead)
-    while (runStatus.status !== 'completed' && runStatus.status !== 'failed') {
+    // Poll for the run to complete with timeout
+    let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    const startTime = Date.now();
+    const MAX_WAIT_TIME = 120000; // 2 minutes max wait time
+    
+    // Wait for the run to complete with timeout
+    while (runStatus.status !== 'completed' && runStatus.status !== 'failed' && runStatus.status !== 'cancelled') {
+      // Check for timeout
+      if (Date.now() - startTime > MAX_WAIT_TIME) {
+        console.error(`Run ${run.id} timed out after ${MAX_WAIT_TIME}ms, status: ${runStatus.status}`);
+        try {
+          // Try to cancel the run
+          await openai.beta.threads.runs.cancel(thread.id, run.id);
+          console.log(`Cancelled run ${run.id} due to timeout`);
+        } catch (cancelError) {
+          console.error(`Error cancelling run ${run.id}:`, cancelError);
+        }
+        return res.status(504).json({ error: 'Assistant run timed out' });
+      }
+      
+      // Wait before checking again
       await new Promise(resolve => setTimeout(resolve, 1000));
-      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+      
+      try {
+        runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+        console.log(`Run ${run.id} status: ${runStatus.status}`);
+      } catch (statusError) {
+        console.error(`Error retrieving run status:`, statusError);
+        break;
+      }
     }
     
     if (runStatus.status === 'failed') {
-      return res.status(500).json({ error: 'Assistant run failed', details: runStatus });
+      console.error(`Run ${run.id} failed:`, runStatus.last_error);
+      return res.status(500).json({ 
+        error: 'Assistant run failed', 
+        details: runStatus.last_error?.message || 'Unknown error' 
+      });
+    }
+    
+    if (runStatus.status !== 'completed') {
+      console.error(`Run ${run.id} ended with unexpected status: ${runStatus.status}`);
+      return res.status(500).json({ 
+        error: `Assistant run ended with status: ${runStatus.status}` 
+      });
     }
     
     // Get the messages
     const messages = await openai.beta.threads.messages.list(thread.id);
     
     // Return the assistant's response
+    // API returns messages in reverse chronological order, so first message is the latest
     const assistantMessages = messages.data.filter(msg => msg.role === 'assistant');
+    
+    // Check if we have any assistant messages
+    if (!assistantMessages.length) {
+      console.error(`No assistant messages found in thread ${thread.id} after run completed`);
+      return res.status(500).json({ error: 'No response received from assistant' });
+    }
+    
+    // Get the most recent message (it should be the first one in the list)
     const latestMessage = assistantMessages[0];
+    
+    // Ensure the message content exists and has the expected structure
+    if (!latestMessage.content || !latestMessage.content.length || !latestMessage.content[0].text) {
+      console.error(`Malformed message content:`, latestMessage);
+      return res.status(500).json({ error: 'Invalid response format from assistant' });
+    }
+    
+    console.log(`Successfully retrieved response from thread ${thread.id}`);
     
     res.json({
       message: latestMessage.content[0].text.value,
@@ -596,7 +704,63 @@ app.post('/api/openai/query', async (req, res) => {
     });
   } catch (error) {
     console.error('Error querying OpenAI assistant:', error);
-    res.status(500).json({ error: 'Failed to query OpenAI assistant' });
+    // Provide more helpful error message
+    let errorMessage = 'Failed to query OpenAI assistant';
+    if (error.response && error.response.data && error.response.data.error) {
+      errorMessage += `: ${error.response.data.error}`;
+    } else if (error.message) {
+      errorMessage += `: ${error.message}`;
+    }
+    res.status(500).json({ error: errorMessage });
+  }
+});
+
+// Validate a thread exists and is accessible
+app.post('/api/openai/validate-thread', async (req, res) => {
+  try {
+    const { threadId, assistantId } = req.body;
+    
+    if (!threadId) {
+      return res.status(400).json({ 
+        valid: false,
+        error: 'Thread ID is required'
+      });
+    }
+    
+    try {
+      // Try to retrieve the thread from OpenAI
+      const threadCheck = await openai.beta.threads.retrieve(threadId);
+      console.log(`Thread ${threadId} validated successfully, status: ${threadCheck.status || 'active'}`);
+      
+      // If assistant ID is provided, update the thread access time in cache
+      if (assistantId) {
+        openaiCache.updateThreadAccess(assistantId);
+      }
+      
+      return res.json({ 
+        valid: true,
+        threadId: threadId
+      });
+    } catch (error) {
+      console.error(`Thread validation failed for ${threadId}:`, error);
+      
+      // Get detailed error information
+      let errorDetails = error.message || 'Unknown error';
+      if (error.response && error.response.data) {
+        errorDetails = `${error.response.status}: ${JSON.stringify(error.response.data)}`;
+      }
+      
+      return res.json({ 
+        valid: false,
+        error: `Thread not found or inaccessible: ${errorDetails}`
+      });
+    }
+  } catch (error) {
+    console.error('Error in thread validation endpoint:', error);
+    res.status(500).json({ 
+      valid: false,
+      error: 'Server error during thread validation'
+    });
   }
 });
 
@@ -609,36 +773,145 @@ app.post('/api/openai/continue', async (req, res) => {
       return res.status(400).json({ error: 'Prompt, thread ID, and assistant ID are required' });
     }
     
+    console.log(`Continuing conversation on thread ${threadId} with assistant ${assistantId}`);
+    
+    try {
+      // First, update the thread access time if it's in our cache
+      openaiCache.updateThreadAccess(assistantId);
+      
+      // Check if the thread exists
+      const threadCheck = await openai.beta.threads.retrieve(threadId);
+      console.log(`Thread ${threadId} exists, status: ${threadCheck.status || 'active'}`);
+      
+      // Double check the thread is in our cache; if not, add it
+      if (!openaiCache.getThread(assistantId) || openaiCache.getThread(assistantId).threadId !== threadId) {
+        console.log(`Adding thread ${threadId} to cache for assistant ${assistantId}`);
+        openaiCache.saveThread(assistantId, threadId);
+      }
+    } catch (threadError) {
+      console.error(`Thread ${threadId} does not exist or is invalid:`, threadError);
+      
+      // Log detailed error information for debugging
+      if (threadError.response) {
+        console.error('OpenAI API error details:', {
+          status: threadError.response.status,
+          data: threadError.response.data
+        });
+      }
+      
+      // Check if we have another valid thread for this assistant
+      const existingThread = openaiCache.getThread(assistantId);
+      if (existingThread && existingThread.threadId !== threadId) {
+        try {
+          // Try to validate the other thread
+          const otherThreadCheck = await openai.beta.threads.retrieve(existingThread.threadId);
+          console.log(`Found alternative valid thread ${existingThread.threadId} for assistant ${assistantId}`);
+          
+          // Return the alternate thread ID to client
+          return res.status(409).json({
+            error: 'Requested thread not found, but another valid thread exists',
+            code: 'thread_alternative_available',
+            alternateThreadId: existingThread.threadId
+          });
+        } catch (otherThreadError) {
+          console.error(`Alternative thread ${existingThread.threadId} is also invalid:`, otherThreadError.message);
+          // Both threads are invalid, remove from cache
+          delete openaiCache.threads[assistantId];
+        }
+      }
+      
+      // If no valid thread exists, notify client to create a new one
+      return res.status(404).json({ 
+        error: 'Thread not found or invalid. Please start a new conversation.',
+        code: 'thread_not_found'
+      });
+    }
+    
     // Add a message to the thread
-    await openai.beta.threads.messages.create(threadId, {
+    const message = await openai.beta.threads.messages.create(threadId, {
       role: "user",
       content: prompt
     });
+    
+    console.log(`Added message to thread ${threadId}, message ID: ${message.id}`);
     
     // Run the assistant
     const run = await openai.beta.threads.runs.create(threadId, {
       assistant_id: assistantId
     });
     
-    // Poll for the run to complete
-    let runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+    console.log(`Started run ${run.id} on thread ${threadId}`);
     
-    // Wait for the run to complete
-    while (runStatus.status !== 'completed' && runStatus.status !== 'failed') {
+    // Poll for the run to complete with timeout
+    let runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+    const startTime = Date.now();
+    const MAX_WAIT_TIME = 120000; // 2 minutes max wait time
+    
+    // Wait for the run to complete with timeout
+    while (runStatus.status !== 'completed' && runStatus.status !== 'failed' && runStatus.status !== 'cancelled') {
+      // Check for timeout
+      if (Date.now() - startTime > MAX_WAIT_TIME) {
+        console.error(`Run ${run.id} timed out after ${MAX_WAIT_TIME}ms, status: ${runStatus.status}`);
+        try {
+          // Try to cancel the run
+          await openai.beta.threads.runs.cancel(threadId, run.id);
+          console.log(`Cancelled run ${run.id} due to timeout`);
+        } catch (cancelError) {
+          console.error(`Error cancelling run ${run.id}:`, cancelError);
+        }
+        return res.status(504).json({ error: 'Assistant run timed out' });
+      }
+      
+      // Wait before checking again
       await new Promise(resolve => setTimeout(resolve, 1000));
-      runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+      
+      try {
+        runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+        console.log(`Run ${run.id} status: ${runStatus.status}`);
+      } catch (statusError) {
+        console.error(`Error retrieving run status:`, statusError);
+        break;
+      }
     }
     
     if (runStatus.status === 'failed') {
-      return res.status(500).json({ error: 'Assistant run failed', details: runStatus });
+      console.error(`Run ${run.id} failed:`, runStatus.last_error);
+      return res.status(500).json({ 
+        error: 'Assistant run failed', 
+        details: runStatus.last_error?.message || 'Unknown error' 
+      });
+    }
+    
+    if (runStatus.status !== 'completed') {
+      console.error(`Run ${run.id} ended with unexpected status: ${runStatus.status}`);
+      return res.status(500).json({ 
+        error: `Assistant run ended with status: ${runStatus.status}` 
+      });
     }
     
     // Get the messages
     const messages = await openai.beta.threads.messages.list(threadId);
     
     // Return the assistant's response
+    // API returns messages in reverse chronological order, so first message is the latest
     const assistantMessages = messages.data.filter(msg => msg.role === 'assistant');
+    
+    // Check if we have any assistant messages
+    if (!assistantMessages.length) {
+      console.error(`No assistant messages found in thread ${threadId} after run completed`);
+      return res.status(500).json({ error: 'No response received from assistant' });
+    }
+    
+    // Get the most recent message (it should be the first one in the list)
     const latestMessage = assistantMessages[0];
+    
+    // Ensure the message content exists and has the expected structure
+    if (!latestMessage.content || !latestMessage.content.length || !latestMessage.content[0].text) {
+      console.error(`Malformed message content:`, latestMessage);
+      return res.status(500).json({ error: 'Invalid response format from assistant' });
+    }
+    
+    console.log(`Successfully retrieved response from thread ${threadId}`);
     
     res.json({
       message: latestMessage.content[0].text.value,
@@ -646,7 +919,14 @@ app.post('/api/openai/continue', async (req, res) => {
     });
   } catch (error) {
     console.error('Error continuing conversation:', error);
-    res.status(500).json({ error: 'Failed to continue conversation' });
+    // Provide more helpful error message
+    let errorMessage = 'Failed to continue conversation';
+    if (error.response && error.response.data && error.response.data.error) {
+      errorMessage += `: ${error.response.data.error}`;
+    } else if (error.message) {
+      errorMessage += `: ${error.message}`;
+    }
+    res.status(500).json({ error: errorMessage });
   }
 });
 

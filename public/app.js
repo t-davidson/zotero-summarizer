@@ -34,16 +34,120 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedDocuments: [],
         assistant: null,
         currentThread: null,
-        documentFileIds: {}
+        documentFileIds: {},
+        // UI state
+        configPanelMinimized: false,
+        searchQuery: '',
+        // Flag to indicate if we're trying to recover a thread
+        isRecoveringThread: false
     };
 
+    // Thread management with localStorage
+    
+    // Save thread info to localStorage
+    function saveThreadToStorage(assistantId, threadId) {
+        if (!assistantId || !threadId) return;
+        
+        const threadData = {
+            assistantId: assistantId,
+            threadId: threadId,
+            timestamp: Date.now()
+        };
+        
+        try {
+            localStorage.setItem(`thread_${assistantId}`, JSON.stringify(threadData));
+            console.log(`Saved thread ${threadId} to localStorage for assistant ${assistantId}`);
+        } catch (err) {
+            console.error('Error saving thread to localStorage:', err);
+        }
+    }
+    
+    // Load thread info from localStorage
+    function loadThreadFromStorage(assistantId) {
+        if (!assistantId) return null;
+        
+        try {
+            const threadDataStr = localStorage.getItem(`thread_${assistantId}`);
+            if (!threadDataStr) return null;
+            
+            const threadData = JSON.parse(threadDataStr);
+            
+            // Check if thread data is not too old (7 days max)
+            const MAX_THREAD_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
+            if (Date.now() - threadData.timestamp > MAX_THREAD_AGE) {
+                console.log(`Thread for assistant ${assistantId} is too old, removing from storage`);
+                localStorage.removeItem(`thread_${assistantId}`);
+                return null;
+            }
+            
+            console.log(`Loaded thread ${threadData.threadId} from localStorage for assistant ${assistantId}`);
+            return threadData;
+        } catch (err) {
+            console.error('Error loading thread from localStorage:', err);
+            return null;
+        }
+    }
+    
+    // Validate a thread with the server
+    async function validateThread(threadId, assistantId) {
+        if (!threadId) return false;
+        
+        try {
+            const response = await fetch('/api/openai/validate-thread', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    threadId: threadId,
+                    assistantId: assistantId
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.valid) {
+                console.log(`Thread ${threadId} validated successfully`);
+                return true;
+            } else {
+                console.warn(`Thread ${threadId} is invalid: ${data.error || 'Unknown error'}`);
+                return false;
+            }
+        } catch (err) {
+            console.error('Error validating thread:', err);
+            return false;
+        }
+    }
+    
     // Initialize app
-    function initApp() {
+    async function initApp() {
         // Set up event listeners
         setupEventListeners();
         
         // Load collections automatically on page load
         loadCollections();
+        
+        // Auto-load saved assistant and thread if available
+        try {
+            // If we have a saved assistant in localStorage, restore it
+            const savedAssistantData = localStorage.getItem('current_assistant');
+            if (savedAssistantData) {
+                const savedAssistant = JSON.parse(savedAssistantData);
+                
+                console.log('Found saved assistant in localStorage:', savedAssistant.id);
+                
+                // If we also have a thread for this assistant, check if it's valid
+                const savedThread = loadThreadFromStorage(savedAssistant.id);
+                if (savedThread) {
+                    console.log('Found saved thread in localStorage:', savedThread.threadId);
+                    
+                    // We'll let the conversation restore when the user sends a message
+                    // This helps avoid unnecessary API calls on page load
+                }
+            }
+        } catch (error) {
+            console.error('Error checking for saved assistant:', error);
+        }
     }
 
     // Set up event listeners
@@ -52,6 +156,79 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshBtnEl.addEventListener('click', () => {
             loadCollections();
         });
+        
+        // Add search input for documents
+        const searchContainer = document.createElement('div');
+        searchContainer.className = 'flex items-center bg-white border rounded p-1 mb-2 sticky top-0 z-10';
+        searchContainer.innerHTML = `
+            <input type="text" id="document-search" placeholder="Search documents..." 
+                   class="flex-1 p-1 border-none focus:outline-none focus:ring-1 focus:ring-blue-300">
+            <button id="clear-search-btn" class="text-gray-400 hover:text-gray-600 p-1">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+        `;
+        
+        // Insert search before documents container
+        documentsContainerEl.parentNode.insertBefore(searchContainer, documentsContainerEl);
+        
+        // Get search elements
+        const searchInputEl = document.getElementById('document-search');
+        const clearSearchBtnEl = document.getElementById('clear-search-btn');
+        
+        // Search documents on input
+        searchInputEl.addEventListener('input', (e) => {
+            state.searchQuery = e.target.value.trim().toLowerCase();
+            filterDocuments();
+        });
+        
+        // Clear search button
+        clearSearchBtnEl.addEventListener('click', () => {
+            searchInputEl.value = '';
+            state.searchQuery = '';
+            filterDocuments();
+        });
+        
+        // Add minimize button to assistant config panel
+        const configPanel = document.getElementById('assistant-config');
+        if (configPanel) {
+            // Add a header with minimize button
+            const headerDiv = document.createElement('div');
+            headerDiv.className = 'flex justify-between items-center mb-3 bg-gray-100 p-2 rounded';
+            headerDiv.innerHTML = `
+                <h3 class="font-medium">Assistant Configuration</h3>
+                <button id="toggle-config-btn" class="text-gray-600 hover:text-gray-800 p-1 rounded">
+                    <span id="toggle-icon">▼</span>
+                </button>
+            `;
+            
+            // Insert at the beginning of the config panel
+            configPanel.insertBefore(headerDiv, configPanel.firstChild);
+            
+            // Get config content elements
+            const configContentEls = Array.from(configPanel.children).filter(el => 
+                el !== headerDiv && !el.classList.contains('hidden'));
+            
+            // Toggle button functionality
+            const toggleBtn = document.getElementById('toggle-config-btn');
+            const toggleIcon = document.getElementById('toggle-icon');
+            
+            toggleBtn.addEventListener('click', () => {
+                state.configPanelMinimized = !state.configPanelMinimized;
+                
+                // Toggle config content visibility
+                configContentEls.forEach(el => {
+                    if (state.configPanelMinimized) {
+                        el.classList.add('hidden');
+                        toggleIcon.textContent = '▲';
+                    } else {
+                        el.classList.remove('hidden');
+                        toggleIcon.textContent = '▼';
+                    }
+                });
+            });
+        }
 
         // Select all documents button
         selectAllBtn.addEventListener('click', () => {
@@ -301,6 +478,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     assistantStatusEl.classList.remove('bg-gray-200', 'text-gray-600');
                     assistantStatusEl.classList.add('bg-green-100', 'text-green-800');
                     
+                    // Save assistant to localStorage for later restoring
+                    try {
+                        localStorage.setItem('current_assistant', JSON.stringify({
+                            id: assistantData.id,
+                            name: name,
+                            timestamp: Date.now()
+                        }));
+                        console.log(`Saved assistant ${assistantData.id} to localStorage`);
+                    } catch (storageError) {
+                        console.error('Error saving assistant to localStorage:', storageError);
+                    }
+                    
                     // Enable chat
                     chatInputEl.disabled = false;
                     sendMessageBtn.disabled = false;
@@ -440,7 +629,11 @@ This will help me understand what knowledge you have available.`;
             if (response.ok) {
                 state.documents = data;
                 state.selectedDocuments = [];
-                renderDocuments();
+                state.searchQuery = ''; // Reset search query when loading new collection
+                if (document.getElementById('document-search')) {
+                    document.getElementById('document-search').value = '';
+                }
+                filterDocuments(); // Use filter function which will handle rendering
             } else {
                 throw new Error(`Failed to load documents: ${data.error}`);
             }
@@ -459,8 +652,59 @@ This will help me understand what knowledge you have available.`;
         }
     }
 
+    // Filter documents based on search query
+    function filterDocuments() {
+        const query = state.searchQuery.toLowerCase();
+        
+        // If no search query, just render the documents
+        if (!query) {
+            renderDocuments(state.documents);
+            return;
+        }
+        
+        // Filter documents based on search query
+        const filteredDocs = state.documents.filter(doc => {
+            // Search in title
+            if (doc.data.title && doc.data.title.toLowerCase().includes(query)) {
+                return true;
+            }
+            
+            // Search in authors
+            if (doc.data.creators && doc.data.creators.length > 0) {
+                for (const creator of doc.data.creators) {
+                    const authorName = (creator.firstName && creator.lastName) 
+                        ? `${creator.lastName}, ${creator.firstName}`.toLowerCase()
+                        : (creator.name || '').toLowerCase();
+                    if (authorName.includes(query)) {
+                        return true;
+                    }
+                }
+            }
+            
+            // Search in journal/publication
+            if (doc.data.publicationTitle && doc.data.publicationTitle.toLowerCase().includes(query)) {
+                return true;
+            }
+            
+            // Search in abstract
+            if (doc.data.abstractNote && doc.data.abstractNote.toLowerCase().includes(query)) {
+                return true;
+            }
+            
+            // Search in DOI
+            if (doc.data.DOI && doc.data.DOI.toLowerCase().includes(query)) {
+                return true;
+            }
+            
+            return false;
+        });
+        
+        // Render filtered documents
+        renderDocuments(filteredDocs);
+    }
+    
     // Render documents
-    function renderDocuments() {
+    function renderDocuments(docsToRender = state.documents) {
         documentsContainerEl.innerHTML = '';
         
         const collection = state.collections.find(c => c.key === state.selectedCollection);
@@ -468,12 +712,17 @@ This will help me understand what knowledge you have available.`;
             documentsTitleEl.textContent = `${collection.data.name} Documents`;
         }
         
-        documentCountEl.textContent = `${state.documents.length} documents`;
+        // Show different count based on search or all documents
+        if (state.searchQuery) {
+            documentCountEl.textContent = `${docsToRender.length} of ${state.documents.length} documents`;
+        } else {
+            documentCountEl.textContent = `${state.documents.length} documents`;
+        }
         
-        if (state.documents.length === 0) {
+        if (docsToRender.length === 0) {
             documentsContainerEl.innerHTML = `
                 <div class="flex items-center justify-center py-12 text-gray-400">
-                    No documents found in this collection
+                    ${state.searchQuery ? 'No matching documents found' : 'No documents found in this collection'}
                 </div>
             `;
             selectAllBtn.classList.add('hidden');
@@ -483,10 +732,10 @@ This will help me understand what knowledge you have available.`;
         selectAllBtn.classList.remove('hidden');
         
         // Count documents with PDFs
-        const docsWithPdfs = state.documents.filter(doc => doc.hasPDF).length;
-        documentCountEl.textContent = `${state.documents.length} documents (${docsWithPdfs} with PDFs)`;
+        const docsWithPdfs = docsToRender.filter(doc => doc.hasPDF).length;
+        documentCountEl.textContent = `${docsToRender.length} documents (${docsWithPdfs} with PDFs)`;
         
-        state.documents.forEach(doc => {
+        docsToRender.forEach(doc => {
             const docEl = document.createElement('div');
             docEl.className = `document-item border rounded p-3 mb-3 flex items-start ${!doc.hasPDF ? 'opacity-60' : ''}`;
             docEl.dataset.id = doc.key;
@@ -639,6 +888,9 @@ This will help me understand what knowledge you have available.`;
                 // Save thread ID for continued conversation
                 state.currentThread = data.threadId;
                 
+                // Save thread to localStorage
+                saveThreadToStorage(state.assistant.id, data.threadId);
+                
                 // Add assistant response to chat
                 appendMessage(data.message, 'assistant');
             } else {
@@ -683,9 +935,46 @@ This will help me understand what knowledge you have available.`;
             // Scroll to bottom
             chatContainerEl.scrollTop = chatContainerEl.scrollHeight;
             
+            // Validate thread if we have one
+            let useExistingThread = false;
+            if (state.currentThread) {
+                // Check if thread is valid
+                const isValid = await validateThread(state.currentThread, state.assistant.id);
+                
+                if (isValid) {
+                    useExistingThread = true;
+                } else {
+                    // Thread is invalid, try to get a stored thread from localStorage
+                    const storedThread = loadThreadFromStorage(state.assistant.id);
+                    
+                    if (storedThread && storedThread.threadId !== state.currentThread) {
+                        // We have a different stored thread, try to validate it
+                        const isStoredValid = await validateThread(storedThread.threadId, state.assistant.id);
+                        
+                        if (isStoredValid) {
+                            console.log(`Using stored thread ${storedThread.threadId} from localStorage`);
+                            state.currentThread = storedThread.threadId;
+                            useExistingThread = true;
+                            
+                            // Let user know we're continuing a previous conversation
+                            appendMessage('Continuing from a previous conversation...', 'system');
+                        } else {
+                            console.log('Stored thread is also invalid, starting new conversation');
+                            state.currentThread = null;
+                        }
+                    } else {
+                        // No valid thread found
+                        console.log('No valid thread found, starting new conversation');
+                        state.currentThread = null;
+                    }
+                }
+            }
+            
             // Send to API
             let response;
-            if (state.currentThread) {
+            
+            if (useExistingThread) {
+                console.log(`Continuing conversation on thread ${state.currentThread}`);
                 // Continue existing thread
                 response = await fetch('/api/openai/continue', {
                     method: 'POST',
@@ -699,6 +988,7 @@ This will help me understand what knowledge you have available.`;
                     })
                 });
             } else {
+                console.log('Starting new conversation thread');
                 // Start new thread
                 response = await fetch('/api/openai/query', {
                     method: 'POST',
@@ -720,11 +1010,91 @@ This will help me understand what knowledge you have available.`;
             if (response.ok) {
                 // Save thread ID for continued conversation
                 state.currentThread = data.threadId;
+                console.log(`Using thread ID: ${state.currentThread}`);
+                
+                // Save thread to localStorage
+                saveThreadToStorage(state.assistant.id, state.currentThread);
                 
                 // Add assistant response to chat
                 appendMessage(data.message, 'assistant');
             } else {
-                throw new Error(`Failed to get response: ${data.error}`);
+                console.error('API returned error:', data.error);
+                
+                // Handle specific error cases
+                if (data.code === 'thread_not_found' || 
+                    (data.error && data.error.includes('thread') && data.error.includes('not found'))) {
+                    
+                    console.log('Thread not found or invalid, resetting and trying again with a new thread');
+                    // Reset thread ID
+                    state.currentThread = null;
+                    
+                    // Show message to user about the conversation restart
+                    appendMessage('Your previous conversation thread has expired. Starting a new conversation...', 'assistant', true);
+                    
+                    // Try again with a new thread
+                    console.log('Starting new conversation thread after thread error');
+                    const newResponse = await fetch('/api/openai/query', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            prompt: message,
+                            assistantId: state.assistant.id
+                        })
+                    });
+                    
+                    const newData = await newResponse.json();
+                    
+                    if (newResponse.ok) {
+                        // Save new thread ID
+                        state.currentThread = newData.threadId;
+                        console.log(`Using new thread ID: ${state.currentThread}`);
+                        
+                        // Save thread to localStorage
+                        saveThreadToStorage(state.assistant.id, state.currentThread);
+                        
+                        // Add assistant response to chat
+                        appendMessage(newData.message, 'assistant');
+                    } else {
+                        // If the retry also failed, show error
+                        appendMessage('The conversation thread was lost and a new conversation could not be started. Please refresh the page and try again.', 'assistant', true);
+                    }
+                } else if (data.code === 'thread_alternative_available' && data.alternateThreadId) {
+                    // Server found an alternate valid thread
+                    console.log(`Using alternative thread ${data.alternateThreadId} suggested by server`);
+                    state.currentThread = data.alternateThreadId;
+                    
+                    // Let user know we're continuing a previous conversation
+                    appendMessage('Continuing from a previous conversation...', 'system');
+                    
+                    // Try again with the alternate thread
+                    const altResponse = await fetch('/api/openai/continue', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            prompt: message,
+                            threadId: state.currentThread,
+                            assistantId: state.assistant.id
+                        })
+                    });
+                    
+                    const altData = await altResponse.json();
+                    
+                    if (altResponse.ok) {
+                        // Save thread to localStorage
+                        saveThreadToStorage(state.assistant.id, state.currentThread);
+                        
+                        // Add assistant response to chat
+                        appendMessage(altData.message, 'assistant');
+                    } else {
+                        throw new Error(`Failed to use alternative thread: ${altData.error}`);
+                    }
+                } else {
+                    throw new Error(`Failed to get response: ${data.error}`);
+                }
             }
         } catch (error) {
             console.error('Error sending message:', error);
@@ -735,8 +1105,28 @@ This will help me understand what knowledge you have available.`;
                 chatContainerEl.removeChild(typingIndicator);
             }
             
-            // Add error message
-            appendMessage('Sorry, I encountered an error processing your request. Please try again.', 'assistant', true);
+            // More descriptive error message
+            let errorMessage = 'Sorry, I encountered an error processing your request.';
+            
+            // Add more details if we have them
+            if (error.message && error.message.includes('Failed to get response:')) {
+                errorMessage += ' ' + error.message.replace('Failed to get response: ', '');
+            } else {
+                errorMessage += ' Please try again.';
+            }
+            
+            // Add error message to chat
+            appendMessage(errorMessage, 'assistant', true);
+            
+            // If there seems to be an issue with the thread, reset it
+            if (error.message && (
+                error.message.includes('thread') || 
+                error.message.includes('Thread') ||
+                error.message.includes('not found')
+            )) {
+                console.log('Resetting conversation thread due to thread-related error');
+                state.currentThread = null;
+            }
         } finally {
             // Re-enable input and button
             chatInputEl.disabled = false;
@@ -748,7 +1138,13 @@ This will help me understand what knowledge you have available.`;
     // Append message to chat
     function appendMessage(text, role, isError = false) {
         const messageEl = document.createElement('div');
-        messageEl.className = `${role}-message chat-message${isError ? ' error' : ''}`;
+        
+        // Use our CSS classes instead of inline styles
+        if (role === 'system') {
+            messageEl.className = 'system-message chat-message';
+        } else {
+            messageEl.className = `${role}-message chat-message${isError ? ' error' : ''}`;
+        }
         
         // Convert newlines to <br> and handle markdown-like formatting
         const formattedText = text
