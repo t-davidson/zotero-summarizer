@@ -15,19 +15,41 @@ if (!fs.existsSync(logDir)) {
 }
 
 // Create a log file with timestamp
-const logFileName = `app-${new Date().toISOString().replace(/:/g, '-')}.log`;
+const logFileName = `app-${new Date().toISOString().replace(/[:/]/g, '-')}.log`;
 const logFilePath = path.join(logDir, logFileName);
 const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
 
-// Symlink to latest log for easy access
-const latestLogPath = path.join(logDir, 'latest.log');
+// Limit number of log files to keep
+const MAX_LOG_FILES = 10;
 try {
+  const logFiles = fs.readdirSync(logDir)
+    .filter(file => file.startsWith('app-') && file.endsWith('.log'))
+    .sort((a, b) => {
+      // Sort by file creation time (newest first)
+      return fs.statSync(path.join(logDir, b)).mtime.getTime() - 
+             fs.statSync(path.join(logDir, a)).mtime.getTime();
+    });
+    
+  // Delete older log files beyond the limit
+  if (logFiles.length > MAX_LOG_FILES) {
+    logFiles.slice(MAX_LOG_FILES).forEach(file => {
+      try {
+        fs.unlinkSync(path.join(logDir, file));
+        console.log(`Deleted old log file: ${file}`);
+      } catch (deleteErr) {
+        console.error(`Failed to delete old log file ${file}: ${deleteErr.message}`);
+      }
+    });
+  }
+  
+  // Symlink to latest log for easy access
+  const latestLogPath = path.join(logDir, 'latest.log');
   if (fs.existsSync(latestLogPath)) {
     fs.unlinkSync(latestLogPath);
   }
   fs.symlinkSync(logFilePath, latestLogPath);
 } catch (error) {
-  console.log(`Could not create symlink to latest log: ${error.message}`);
+  console.error(`Error managing log files: ${error.message}`);
 }
 
 // Override console.log and console.error to also write to our log file
@@ -59,26 +81,33 @@ const ZOTERO_API_KEY = process.env.ZOTERO_API_KEY;
 const ZOTERO_USER_ID = process.env.ZOTERO_USER_ID;
 
 // Check required environment variables
-if (!OPENAI_API_KEY) {
-  console.error('Error: OPENAI_API_KEY is required in .env file');
-  process.exit(1);
-}
+const requiredEnvVars = [
+  { key: 'OPENAI_API_KEY', name: 'OpenAI API Key' },
+  { key: 'ZOTERO_API_KEY', name: 'Zotero API Key' },
+  { key: 'ZOTERO_USER_ID', name: 'Zotero User ID' }
+];
 
-if (!ZOTERO_API_KEY) {
-  console.error('Error: ZOTERO_API_KEY is required in .env file');
-  process.exit(1);
-}
-
-if (!ZOTERO_USER_ID) {
-  console.error('Error: ZOTERO_USER_ID is required in .env file');
+const missingVars = requiredEnvVars.filter(v => !process.env[v.key]);
+if (missingVars.length > 0) {
+  console.error('Error: Missing required environment variables:');
+  missingVars.forEach(v => console.error(`- ${v.name} (${v.key}) is required in .env file`));
   process.exit(1);
 }
 
 // Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' })); // Increase JSON request size limit
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Security middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'self'");
+  next();
+});
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -346,22 +375,40 @@ app.get('/api/item/:itemKey/pdf', async (req, res) => {
     const { itemKey } = req.params;
     const { attachmentKey } = req.query; // Optional attachment key if known
     
+    // Generate a unique, secure random filename to prevent path traversal
+    const uniqueId = require('crypto').randomBytes(4).toString('hex').toUpperCase();
+    const tempFilePath = path.join(__dirname, 'temp', `${uniqueId}.pdf`);
+    
     // Determine PDF URL based on parameters
     let pdfUrl;
+    let fileMetadata = {};
     
     if (attachmentKey) {
       // If we already know which attachment to use
+      if (!/^[A-Z0-9]+$/.test(attachmentKey)) {
+        return res.status(400).json({ error: 'Invalid attachment key format' });
+      }
       pdfUrl = `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${attachmentKey}/file`;
+      fileMetadata.attachmentKey = attachmentKey;
     } else {
       // Check if the item is itself a PDF 
+      if (!/^[A-Z0-9]+$/.test(itemKey)) {
+        return res.status(400).json({ error: 'Invalid item key format' });
+      }
+      
       const itemResponse = await axios.get(
         `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${itemKey}`, {
           headers: zoteroConfig.headers
         }
       );
       
+      // Extract title and other metadata
+      fileMetadata.title = itemResponse.data.data.title || 'Untitled';
+      fileMetadata.creators = itemResponse.data.data.creators || [];
+      
       if (itemResponse.data.data.contentType === 'application/pdf') {
         pdfUrl = `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${itemKey}/file`;
+        fileMetadata.type = 'direct';
       } else {
         // Get attachments for this item
         const attachmentsResponse = await axios.get(
@@ -377,6 +424,9 @@ app.get('/api/item/:itemKey/pdf', async (req, res) => {
         
         if (pdfAttachment) {
           pdfUrl = `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${pdfAttachment.data.key}/file`;
+          fileMetadata.attachmentKey = pdfAttachment.data.key;
+          fileMetadata.attachmentTitle = pdfAttachment.data.title;
+          fileMetadata.type = 'attachment';
         } else {
           return res.status(404).json({ error: 'No PDF attachment found for this item' });
         }
@@ -387,15 +437,37 @@ app.get('/api/item/:itemKey/pdf', async (req, res) => {
       // Get the PDF file
       const pdfResponse = await axios.get(pdfUrl, {
         headers: zoteroConfig.headers,
-        responseType: 'arraybuffer'
+        responseType: 'arraybuffer',
+        timeout: 30000 // 30 second timeout for large PDFs
       });
       
-      // Save the PDF temporarily
-      const tempFilePath = path.join(__dirname, 'temp', `${itemKey}.pdf`);
+      // Ensure the temp directory exists
       fs.mkdirSync(path.join(__dirname, 'temp'), { recursive: true });
+      
+      // Save the PDF temporarily
       fs.writeFileSync(tempFilePath, pdfResponse.data);
       
-      res.json({ filePath: tempFilePath });
+      // Check file size and validate it's actually a PDF
+      const stats = fs.statSync(tempFilePath);
+      const fileSizeInMB = stats.size / (1024 * 1024);
+      
+      // Basic PDF header validation (PDF files start with %PDF-)
+      const fileHeader = fs.readFileSync(tempFilePath, { encoding: 'utf8', start: 0, end: 5 });
+      if (!fileHeader.startsWith('%PDF-')) {
+        fs.unlinkSync(tempFilePath); // Delete the file if it's not a valid PDF
+        return res.status(400).json({ error: 'Downloaded file is not a valid PDF' });
+      }
+      
+      // Log the successful download
+      console.log(`Successfully downloaded PDF: ${fileMetadata.title || itemKey} (${fileSizeInMB.toFixed(2)} MB)`);
+      
+      // Return the path and metadata
+      res.json({ 
+        filePath: tempFilePath,
+        fileId: uniqueId,
+        metadata: fileMetadata,
+        size: fileSizeInMB.toFixed(2) + ' MB'
+      });
     } catch (pdfError) {
       console.error('Error downloading PDF file:', pdfError);
       return res.status(404).json({ error: 'PDF file could not be downloaded' });
@@ -1184,14 +1256,26 @@ function cleanupTempFiles() {
   console.log('Cleaning up temporary files...');
   const tempDir = path.join(__dirname, 'temp');
   if (fs.existsSync(tempDir)) {
+    // Get current time for file age check
+    const now = Date.now();
+    const MAX_FILE_AGE = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+    
     const files = fs.readdirSync(tempDir);
     files.forEach(file => {
       if (file !== '.gitkeep') {
+        const filePath = path.join(tempDir, file);
         try {
-          fs.unlinkSync(path.join(tempDir, file));
-          console.log(`Deleted temp file: ${file}`);
+          // Check file age
+          const stats = fs.statSync(filePath);
+          const fileAge = now - stats.mtimeMs;
+          
+          // Delete file if it's older than MAX_FILE_AGE or immediately on shutdown
+          if (fileAge > MAX_FILE_AGE || process._exiting) {
+            fs.unlinkSync(filePath);
+            console.log(`Deleted temp file: ${file}`);
+          }
         } catch (error) {
-          console.error(`Failed to delete temp file ${file}: ${error.message}`);
+          console.error(`Failed to process temp file ${file}: ${error.message}`);
         }
       }
     });
@@ -1204,22 +1288,67 @@ function cleanupTempFiles() {
   }
 }
 
+// Setup auto-cleanup for old temp files every hour
+const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour in milliseconds
+const autoCleanupInterval = setInterval(() => {
+  console.log('Running scheduled cleanup of old temporary files');
+  cleanupTempFiles();
+}, CLEANUP_INTERVAL);
+
 // Clean up resources when the server exits
-process.on('exit', cleanupTempFiles);
+process.on('exit', () => {
+  console.log('Process exiting');
+  process._exiting = true; // Flag to force immediate cleanup on exit
+  clearInterval(autoCleanupInterval);
+  cleanupTempFiles();
+});
+
 process.on('SIGINT', () => {
   console.log('Received SIGINT, shutting down gracefully');
+  process._exiting = true;
+  clearInterval(autoCleanupInterval);
   cleanupTempFiles();
-  process.exit(0);
+  server.close(() => {
+    console.log('HTTP server closed');
+    if (httpServer) httpServer.close(() => console.log('HTTP redirect server closed'));
+    process.exit(0);
+  });
+  // Force exit after 3 seconds if graceful shutdown fails
+  setTimeout(() => process.exit(1), 3000);
 });
+
 process.on('SIGTERM', () => {
   console.log('Received SIGTERM, shutting down gracefully');
+  process._exiting = true;
+  clearInterval(autoCleanupInterval);
   cleanupTempFiles();
-  process.exit(0);
+  server.close(() => {
+    console.log('HTTP server closed');
+    if (httpServer) httpServer.close(() => console.log('HTTP redirect server closed'));
+    process.exit(0);
+  });
+  // Force exit after 3 seconds if graceful shutdown fails
+  setTimeout(() => process.exit(1), 3000);
 });
+
 process.on('uncaughtException', (error) => {
   console.error('Uncaught exception:', error);
+  process._exiting = true;
+  clearInterval(autoCleanupInterval);
   cleanupTempFiles();
+  // Try to close servers gracefully
+  try {
+    server.close();
+    if (httpServer) httpServer.close();
+  } catch (e) {
+    console.error('Error during server shutdown:', e);
+  }
   process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit, just log the error
 });
 
 // SSL/TLS Certificate options
@@ -1230,19 +1359,48 @@ const httpsOptions = {
 
 // No auto-browser-open function
 
-// Create HTTPS server
-const server = https.createServer(httpsOptions, app).listen(PORT, () => {
-  console.log(`Secure server running on https://localhost:${PORT}`);
-  console.log(`Using Zotero account with User ID: ${ZOTERO_USER_ID}`);
-});
+// Create HTTPS server with error handling
+const server = https.createServer(httpsOptions, app)
+  .listen(PORT, () => {
+    console.log(`Secure server running on https://localhost:${PORT}`);
+    console.log(`Using Zotero account with User ID: ${ZOTERO_USER_ID}`);
+    // Use the 'open' package to open browser window automatically
+    try {
+      const open = require('open');
+      open(`https://localhost:${PORT}`).catch(e => {
+        console.log(`Could not automatically open browser: ${e.message}`);
+        console.log(`Please navigate to https://localhost:${PORT} in your browser.`);
+      });
+    } catch (error) {
+      console.log(`Could not automatically open browser: ${error.message}`);
+      console.log(`Please navigate to https://localhost:${PORT} in your browser.`);
+    }
+  })
+  .on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use. Please choose a different port or stop the other service.`);
+    } else {
+      console.error('Error starting HTTPS server:', err);
+    }
+    process.exit(1);
+  });
 
-// For development convenience, also start an HTTP server that redirects to HTTPS (hidden from documentation)
+// For development convenience, also start an HTTP server that redirects to HTTPS
 const httpApp = express();
 httpApp.use((req, res) => {
   res.redirect(`https://localhost:${PORT}${req.url}`);
 });
+
 const httpServer = httpApp.listen(PORT + 1, () => {
   console.log(`HTTP redirect server running on http://localhost:${PORT + 1}`);
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.warn(`Port ${PORT + 1} for HTTP redirect is already in use. HTTP redirect server will not be available.`);
+    // This is non-critical, so we don't exit
+  } else {
+    console.error('Error starting HTTP redirect server:', err);
+    // Non-critical error, continue without the redirect server
+  }
 });
 
 // No server export for control endpoints

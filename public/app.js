@@ -1515,17 +1515,57 @@ This will help me understand what knowledge you have available.`;
         }
         
         // Convert newlines to <br> and handle markdown-like formatting
+        // Add more comprehensive markdown formatting
         const formattedText = text
+            // Sanitize the text first to prevent XSS
+            .replace(/[&<>"']/g, (match) => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            })[match])
+            // Then apply formatting
+            .replace(/\n\n/g, '<br><br>')
             .replace(/\n/g, '<br>')
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            .replace(/`(.*?)`/g, '<code>$1</code>');
+            .replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
+            .replace(/```(?:\n|)(.*?)```/gs, '<pre><code>$1</code></pre>')
+            .replace(/^#{3}\s+(.*)$/gm, '<h3>$1</h3>')
+            .replace(/^#{2}\s+(.*)$/gm, '<h2>$1</h2>')
+            .replace(/^#{1}\s+(.*)$/gm, '<h1>$1</h1>')
+            .replace(/^>\s+(.*)$/gm, '<blockquote>$1</blockquote>')
+            .replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+            .replace(/^- (.*)$/gm, '<ul><li>$1</li></ul>')
+            .replace(/^\d+\.\s+(.*)$/gm, '<ol><li>$1</li></ol>')
+            // Fix nested lists (combine adjacent ul/ol tags)
+            .replace(/<\/ul>\s*<ul>/g, '')
+            .replace(/<\/ol>\s*<ol>/g, '');
         
         messageEl.innerHTML = formattedText;
         chatContainerEl.appendChild(messageEl);
         
+        // Add timestamp to message
+        const timestamp = document.createElement('div');
+        timestamp.className = 'text-xs text-gray-400 mt-1';
+        timestamp.textContent = new Date().toLocaleTimeString();
+        messageEl.appendChild(timestamp);
+        
         // Scroll to bottom
         chatContainerEl.scrollTop = chatContainerEl.scrollHeight;
+        
+        // Add a notification sound for assistant messages (but not system or error messages)
+        if (role === 'assistant' && !isError) {
+            try {
+                // Create and play a subtle notification sound
+                const audio = new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjIwLjEwMAAAAAAAAAAAAAAA//tUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADmADq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjM1AAAAAAAAAAAAAAAAJAAAAAAAAAAADkLtBCFM//sUZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sUZC8P8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sUZFIP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sUZGkP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sUZIMP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV');
+                audio.volume = 0.2; // Keep volume low
+                audio.play().catch(e => console.log('Could not play notification sound:', e));
+            } catch (e) {
+                // Ignore any errors with audio playback
+            }
+        }
     }
 
     // Progress tracking elements
@@ -1673,4 +1713,32 @@ This will help me understand what knowledge you have available.`;
 
     // Initialize the app
     initApp();
+    
+    // Check for browser compatibility issues
+    function checkBrowserCompatibility() {
+        // Check for localStorage support
+        try {
+            const test = 'test';
+            localStorage.setItem(test, test);
+            localStorage.removeItem(test);
+        } catch (e) {
+            showAlert('Your browser has localStorage disabled or in private browsing mode. Some features may not work properly.', 'warning');
+        }
+        
+        // Check for modern browser APIs we depend on
+        const requiredApis = {
+            'Fetch API': typeof fetch !== 'undefined',
+            'Promises': typeof Promise !== 'undefined',
+            'Async/Await': (async () => {})() instanceof Promise,
+            'ES6 Features': typeof Map !== 'undefined' && typeof Set !== 'undefined'
+        };
+        
+        const missingApis = Object.entries(requiredApis)
+            .filter(([_, supported]) => !supported)
+            .map(([name, _]) => name);
+        
+        if (missingApis.length > 0) {
+            showAlert(`Your browser is missing required features: ${missingApis.join(', ')}. Please use a modern browser.`, 'error');
+        }
+    }
 });
