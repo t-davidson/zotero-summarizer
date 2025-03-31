@@ -2,6 +2,8 @@
 
 A tool for creating AI assistants from your Zotero library to help analyze and summarize academic papers. This tool allows you to select PDFs from a Collection and create a customized GPT-4o assistant using the files as its knowledge base. The tool then provides a chat interface for interacting with the assistant, as well as the capability to load or delete existing assistants.
 
+![Zotero Summarizer Application Screenshot](app_screenshot.png)
+
 ## Features
 
 - Connect to your Zotero library and browse collections
