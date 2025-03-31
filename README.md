@@ -47,15 +47,6 @@ This will start:
 - HTTPS server at https://localhost:3000 (main application)
 - HTTP redirect server at http://localhost:3001 (redirects to HTTPS)
 
-### Self-Signed Certificate Warning
-
-The application uses a self-signed certificate for local HTTPS. When accessing the application:
-
-1. Your browser will show a security warning - this is normal
-2. Click "Advanced" or "Details" on the warning page
-3. Choose "Proceed to localhost (unsafe)" or similar option
-4. This warning only appears because you're using a local certificate, not because the app is unsafe
-
 ## Features
 
 - Connect to your Zotero library and browse collections
