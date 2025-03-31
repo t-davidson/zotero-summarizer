@@ -21,6 +21,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadingOverlayEl = document.getElementById('loading-overlay');
     const loadingTextEl = document.getElementById('loading-text');
     
+    // Existing assistants elements
+    const existingAssistantsEl = document.getElementById('existing-assistants');
+    const refreshAssistantsBtnEl = document.getElementById('refresh-assistants-btn');
+    const loadAssistantBtnEl = document.getElementById('load-assistant-btn');
+    const assistantDetailsEl = document.getElementById('assistant-details');
+    const assistantDetailNameEl = document.getElementById('assistant-detail-name');
+    const assistantDetailCreatedEl = document.getElementById('assistant-detail-created');
+    const assistantDetailModelEl = document.getElementById('assistant-detail-model');
+    const assistantDetailFilesEl = document.getElementById('assistant-detail-files');
+    const assistantDetailInstructionsEl = document.getElementById('assistant-detail-instructions');
+    
     // Hide the settings button since we're using env vars now
     const settingsBtnEl = document.getElementById('settings-btn');
     if (settingsBtnEl) {
@@ -36,6 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
         assistant: null,
         currentThread: null,
         documentFileIds: {},
+        // Existing assistants
+        availableAssistants: [],
+        selectedAssistantId: null,
         // UI state
         configPanelMinimized: false,
         searchQuery: '',
@@ -120,6 +134,157 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    // Load existing assistants from OpenAI
+    async function loadExistingAssistants() {
+        try {
+            // Update dropdown to show loading state
+            existingAssistantsEl.innerHTML = '<option value="">Loading assistants...</option>';
+            existingAssistantsEl.disabled = true;
+            loadAssistantBtnEl.disabled = true;
+            
+            // Hide assistant details if showing
+            assistantDetailsEl.classList.add('hidden');
+            
+            // Fetch assistants from API
+            const response = await fetch('/api/openai/assistants');
+            
+            if (response.ok) {
+                const assistants = await response.json();
+                state.availableAssistants = assistants;
+                
+                // Populate the dropdown
+                if (assistants.length === 0) {
+                    existingAssistantsEl.innerHTML = '<option value="">No assistants found</option>';
+                } else {
+                    existingAssistantsEl.innerHTML = '<option value="">Select an assistant...</option>';
+                    
+                    assistants.forEach(assistant => {
+                        const option = document.createElement('option');
+                        option.value = assistant.id;
+                        
+                        // Format the creation date
+                        const createdDate = new Date(assistant.created_at * 1000);
+                        const formattedDate = createdDate.toLocaleDateString();
+                        
+                        option.textContent = `${assistant.name} (${formattedDate})`;
+                        existingAssistantsEl.appendChild(option);
+                    });
+                }
+                
+                // Enable the dropdown
+                existingAssistantsEl.disabled = false;
+                updateLoadButtonState();
+            } else {
+                const errorData = await response.json();
+                console.error('Error fetching assistants:', errorData.error);
+                existingAssistantsEl.innerHTML = '<option value="">Error loading assistants</option>';
+                showAlert(`Error loading assistants: ${errorData.error}`);
+            }
+        } catch (error) {
+            console.error('Error loading assistants:', error);
+            existingAssistantsEl.innerHTML = '<option value="">Error loading assistants</option>';
+            showAlert(`Error: ${error.message || 'Failed to load assistants'}`);
+        }
+    }
+    
+    // Update the load button state based on selection
+    function updateLoadButtonState() {
+        loadAssistantBtnEl.disabled = !existingAssistantsEl.value;
+    }
+    
+    // Show selected assistant details
+    function showAssistantDetails(assistantId) {
+        // Find the selected assistant
+        const assistant = state.availableAssistants.find(a => a.id === assistantId);
+        
+        if (!assistant) {
+            assistantDetailsEl.classList.add('hidden');
+            return;
+        }
+        
+        // Format the creation date
+        const createdDate = new Date(assistant.created_at * 1000);
+        const formattedDate = createdDate.toLocaleString();
+        
+        // Update the details
+        assistantDetailNameEl.textContent = assistant.name;
+        assistantDetailCreatedEl.textContent = formattedDate;
+        assistantDetailModelEl.textContent = assistant.model;
+        assistantDetailFilesEl.textContent = assistant.file_count || 'Unknown';
+        assistantDetailInstructionsEl.textContent = assistant.instructions || 'No instructions';
+        
+        // Show the details panel
+        assistantDetailsEl.classList.remove('hidden');
+    }
+    
+    // Load a selected assistant
+    async function loadSelectedAssistant() {
+        const assistantId = existingAssistantsEl.value;
+        
+        if (!assistantId) {
+            showAlert('Please select an assistant to load');
+            return;
+        }
+        
+        // Show loading overlay
+        showLoading('Loading assistant...');
+        
+        try {
+            // Fetch the assistant details from API
+            const response = await fetch(`/api/openai/assistant/${assistantId}`);
+            
+            if (response.ok) {
+                const assistant = await response.json();
+                
+                // Save assistant to state
+                state.assistant = assistant;
+                
+                // Update UI to show active assistant
+                assistantStatusEl.textContent = 'Ready';
+                assistantStatusEl.classList.remove('bg-gray-200', 'text-gray-600');
+                assistantStatusEl.classList.add('bg-green-100', 'text-green-800');
+                
+                // Show delete assistant button
+                deleteAssistantBtn.classList.remove('hidden');
+                
+                // Enable chat functionality
+                chatInputEl.disabled = false;
+                sendMessageBtn.disabled = false;
+                
+                // Reset chat container with welcome message
+                chatContainerEl.innerHTML = `
+                    <div class="assistant-message chat-message">
+                        <p>Successfully loaded assistant: <strong>${assistant.name}</strong></p>
+                        <p class="mt-2">How can I help you today?</p>
+                    </div>
+                `;
+                
+                // Save assistant to localStorage for later restoring
+                try {
+                    localStorage.setItem('current_assistant', JSON.stringify({
+                        id: assistant.id,
+                        name: assistant.name,
+                        timestamp: Date.now()
+                    }));
+                    console.log(`Saved assistant ${assistant.id} to localStorage`);
+                } catch (storageError) {
+                    console.error('Error saving assistant to localStorage:', storageError);
+                }
+                
+                showAlert(`Assistant "${assistant.name}" loaded successfully`, 'success');
+            } else {
+                const errorData = await response.json();
+                console.error('Error loading assistant:', errorData.error);
+                showAlert(`Error: ${errorData.error || 'Failed to load assistant'}`);
+            }
+        } catch (error) {
+            console.error('Error loading assistant:', error);
+            showAlert(`Error: ${error.message || 'Failed to load assistant'}`);
+        } finally {
+            hideLoading();
+        }
+    }
+    
     // Initialize app
     async function initApp() {
         // Set up event listeners
@@ -127,6 +292,9 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Load collections automatically on page load
         loadCollections();
+        
+        // Load existing assistants
+        loadExistingAssistants();
         
         // Auto-load saved assistant and thread if available
         try {
@@ -178,9 +346,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Set up event listeners
     function setupEventListeners() {
-        // Refresh button
+        // Refresh button for collections
         refreshBtnEl.addEventListener('click', () => {
             loadCollections();
+        });
+        
+        // Load existing assistants
+        refreshAssistantsBtnEl.addEventListener('click', () => {
+            loadExistingAssistants();
+        });
+        
+        // Assistant selector change
+        existingAssistantsEl.addEventListener('change', () => {
+            state.selectedAssistantId = existingAssistantsEl.value;
+            updateLoadButtonState();
+            showAssistantDetails(state.selectedAssistantId);
+        });
+        
+        // Load assistant button
+        loadAssistantBtnEl.addEventListener('click', () => {
+            loadSelectedAssistant();
         });
         
         // Add search input for documents

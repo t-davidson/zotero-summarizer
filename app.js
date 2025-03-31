@@ -457,6 +457,57 @@ app.post('/api/openai/upload', async (req, res) => {
   }
 });
 
+// Load an existing OpenAI assistant
+app.get('/api/openai/assistant/:assistantId', async (req, res) => {
+  try {
+    const { assistantId } = req.params;
+    
+    if (!assistantId) {
+      return res.status(400).json({ error: 'Assistant ID is required' });
+    }
+    
+    console.log(`Loading existing assistant ${assistantId}`);
+    
+    try {
+      // Retrieve the assistant from OpenAI
+      const assistant = await openai.beta.assistants.retrieve(assistantId);
+      console.log(`Successfully retrieved assistant ${assistantId}`);
+      
+      // Update the assistant in cache
+      openaiCache.assistantId = assistantId;
+      
+      // Get any related vector stores
+      const vectorStoreIds = assistant.tool_resources?.file_search?.vector_store_ids || [];
+      if (vectorStoreIds.length > 0) {
+        openaiCache.vectorStoreId = vectorStoreIds[0];
+        console.log(`Associated vector store: ${openaiCache.vectorStoreId}`);
+        
+        // Get vector store details if available
+        try {
+          const vectorStoreDetails = await openai.vectorStores.retrieve(openaiCache.vectorStoreId);
+          console.log(`Vector store ${openaiCache.vectorStoreId} status: ${vectorStoreDetails.status}`);
+          console.log(`Vector store has ${vectorStoreDetails.file_counts.total} total files`);
+          
+          // Add file count to response
+          assistant.file_count = vectorStoreDetails.file_counts.total;
+        } catch (vectorStoreErr) {
+          console.error(`Error retrieving vector store details: ${vectorStoreErr.message}`);
+        }
+      }
+      
+      res.json(assistant);
+    } catch (error) {
+      console.error(`Error retrieving assistant ${assistantId}:`, error);
+      return res.status(404).json({ 
+        error: `Assistant not found or inaccessible: ${error.message}` 
+      });
+    }
+  } catch (error) {
+    console.error('Error in assistant retrieval endpoint:', error);
+    res.status(500).json({ error: 'Server error during assistant retrieval' });
+  }
+});
+
 // Create or update an OpenAI assistant with selected PDFs
 app.post('/api/openai/assistant', async (req, res) => {
   try {
@@ -820,6 +871,64 @@ app.post('/api/openai/validate-thread', async (req, res) => {
       valid: false,
       error: 'Server error during thread validation'
     });
+  }
+});
+
+// Get all available OpenAI assistants
+app.get('/api/openai/assistants', async (req, res) => {
+  try {
+    console.log('Fetching assistants from OpenAI');
+    
+    const assistants = [];
+    let lastId = undefined;
+    
+    // Paginate through all assistants (OpenAI returns max 100 per request)
+    while (true) {
+      const params = { limit: 100 };
+      if (lastId) {
+        params.after = lastId;
+      }
+      
+      const response = await openai.beta.assistants.list(params);
+      
+      // Add the current page of assistants to our list
+      assistants.push(...response.data);
+      
+      // Check if there are more assistants to fetch
+      if (response.data.length < 100) {
+        break; // No more pages
+      }
+      
+      // Get ID of the last assistant for pagination
+      lastId = response.data[response.data.length - 1].id;
+    }
+    
+    // Sort assistants by creation time, newest first
+    assistants.sort((a, b) => {
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+    
+    // Filter to only include assistants with the file_search tool
+    const filteredAssistants = assistants.filter(assistant => {
+      return assistant.tools && assistant.tools.some(tool => tool.type === 'file_search');
+    });
+    
+    console.log(`Found ${filteredAssistants.length} assistants with file_search capability`);
+    
+    // Format the response to include only relevant information
+    const formattedAssistants = filteredAssistants.map(assistant => ({
+      id: assistant.id,
+      name: assistant.name,
+      created_at: assistant.created_at,
+      model: assistant.model,
+      description: assistant.description,
+      instructions: assistant.instructions?.substring(0, 100) + (assistant.instructions?.length > 100 ? '...' : '')
+    }));
+    
+    res.json(formattedAssistants);
+  } catch (error) {
+    console.error('Error fetching assistants:', error);
+    res.status(500).json({ error: 'Failed to fetch assistants' });
   }
 });
 
