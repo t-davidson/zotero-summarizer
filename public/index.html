@@ -112,7 +112,12 @@
                 <div class="bg-white rounded-lg shadow p-4">
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="text-xl font-semibold text-gray-800">Chat with Assistant</h2>
-                        <span id="assistant-status" class="text-sm px-2 py-1 rounded bg-gray-200 text-gray-600">Not Created</span>
+                        <div class="flex items-center gap-2">
+                            <button id="delete-assistant-btn" class="text-sm bg-red-500 text-white px-2 py-1 rounded hidden hover:bg-red-600">
+                                Delete Assistant
+                            </button>
+                            <span id="assistant-status" class="text-sm px-2 py-1 rounded bg-gray-200 text-gray-600">Not Created</span>
+                        </div>
                     </div>
                     <div class="border-t border-gray-200 pt-4">
                         <div id="chat-container" class="h-96 overflow-y-auto mb-4 p-2">

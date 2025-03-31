@@ -201,6 +201,25 @@ app.get('/api/collection/:collectionId/items', async (req, res) => {
     }
     
     // Keep academic items that are likely papers, books, etc.
+    // Log item types to help with debugging
+    const itemTypes = {};
+    allItems.forEach(item => {
+      const type = item.data.itemType;
+      itemTypes[type] = (itemTypes[type] || 0) + 1;
+    });
+    console.log('Item types in collection:', itemTypes);
+    
+    // Track items with parent IDs to avoid showing both parent and attachment
+    const parentItemMap = new Map();
+    
+    // First pass to identify parent items
+    allItems.forEach(item => {
+      if (item.data.parentItem) {
+        parentItemMap.set(item.data.parentItem, true);
+      }
+    });
+    
+    // Filter out standalone PDFs without a parent entry
     const academicItems = allItems.filter(item => {
       // Include all common academic item types
       const academicTypes = [
@@ -231,17 +250,56 @@ app.get('/api/collection/:collectionId/items', async (req, res) => {
         'map'
       ];
       
+      // Skip standalone attachments and attachments whose parent is in the collection
+      if (item.data.itemType === 'attachment') {
+        // First check if it has a parentItem field
+        if (!item.data.parentItem) {
+          return false; // Skip attachments without a parent reference
+        }
+        
+        // If the parent is already in the collection, skip this attachment
+        if (parentItemMap.has(item.data.parentItem)) {
+          return false;
+        }
+        
+        // Include the attachment only if its parent isn't in this collection
+        return true;
+      }
+      
       // Include all academic items
       return academicTypes.includes(item.data.itemType) || 
              // Also include parent items that might have PDF attachments
              (item.meta && item.meta.numChildren && item.meta.numChildren > 0);
     });
     
+    // Log number of parent items and attachments for debugging
+    let parentCount = 0;
+    let orphanedAttachmentCount = 0;
+    
+    academicItems.forEach(item => {
+      if (item.data.itemType === 'attachment') {
+        orphanedAttachmentCount++;
+      } else if (item.meta && item.meta.numChildren && item.meta.numChildren > 0) {
+        parentCount++;
+      }
+    });
+    
     console.log(`Found ${academicItems.length} academic items out of ${allItems.length} total items`);
+    console.log(`Items breakdown: ${parentCount} parent items, ${orphanedAttachmentCount} orphaned attachments`);
+    console.log(`Excluded ${allItems.length - academicItems.length} non-academic or duplicate items`);
     
     // For each item, check if it has PDF attachments
     const enhancedItems = await Promise.all(academicItems.map(async (item) => {
       try {
+        // Skip checking for children if the item is already an attachment itself
+        if (item.data.itemType === 'attachment') {
+          return {
+            ...item,
+            hasPDF: false,
+            pdfAttachments: []
+          };
+        }
+        
         // Check for PDF attachments
         const attachmentsResponse = await axios.get(
           `${zoteroConfig.baseUrl}/users/${ZOTERO_USER_ID}/items/${item.key}/children`, {
@@ -264,7 +322,8 @@ app.get('/api/collection/:collectionId/items', async (req, res) => {
           }))
         };
       } catch (error) {
-        console.error(`Error checking attachments for item ${item.key}:`, error);
+        // Log error details but continue processing
+        console.error(`Error checking attachments for item ${item.key}:`, error.message);
         return {
           ...item,
           hasPDF: false,
@@ -760,6 +819,84 @@ app.post('/api/openai/validate-thread', async (req, res) => {
     res.status(500).json({ 
       valid: false,
       error: 'Server error during thread validation'
+    });
+  }
+});
+
+// Delete an OpenAI assistant
+app.delete('/api/openai/assistant/:assistantId', async (req, res) => {
+  try {
+    const { assistantId } = req.params;
+    
+    if (!assistantId) {
+      return res.status(400).json({ error: 'Assistant ID is required' });
+    }
+    
+    console.log(`Attempting to delete assistant ${assistantId}`);
+    
+    try {
+      // Delete the assistant from OpenAI
+      const deletionResponse = await openai.beta.assistants.del(assistantId);
+      
+      // Check if deletion was successful
+      if (deletionResponse && deletionResponse.deleted) {
+        console.log(`Successfully deleted assistant ${assistantId}`);
+        
+        // Remove assistant from cache
+        if (openaiCache.assistantId === assistantId) {
+          openaiCache.assistantId = null;
+          console.log('Cleared assistant from application cache');
+        }
+        
+        // Remove thread from cache if exists
+        if (openaiCache.threads[assistantId]) {
+          delete openaiCache.threads[assistantId];
+          console.log(`Removed associated thread for assistant ${assistantId} from cache`);
+        }
+        
+        // Return success response
+        return res.json({ 
+          success: true,
+          message: 'Assistant deleted successfully'
+        });
+      } else {
+        // If the API didn't confirm deletion
+        return res.status(400).json({ 
+          success: false,
+          error: 'Assistant deletion not confirmed by the API'
+        });
+      }
+    } catch (error) {
+      console.error(`Error deleting assistant ${assistantId}:`, error);
+      
+      // Parse API error
+      let errorMessage = 'Failed to delete assistant';
+      if (error.status && error.status === 404) {
+        errorMessage = 'Assistant not found (may already be deleted)';
+        // Still return 200 since the end result is the same - assistant doesn't exist
+        return res.json({
+          success: true,
+          message: errorMessage,
+          warning: 'Assistant not found on OpenAI, but cache has been cleared'
+        });
+      }
+      
+      if (error.response && error.response.data) {
+        errorMessage += `: ${error.response.data.error || JSON.stringify(error.response.data)}`;
+      } else if (error.message) {
+        errorMessage += `: ${error.message}`;
+      }
+      
+      return res.status(error.status || 500).json({ 
+        success: false,
+        error: errorMessage
+      });
+    }
+  } catch (error) {
+    console.error('Error in assistant deletion endpoint:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error during assistant deletion'
     });
   }
 });

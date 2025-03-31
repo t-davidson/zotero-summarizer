@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const documentCountEl = document.getElementById('document-count');
     const selectAllBtn = document.getElementById('select-all-btn');
     const createAssistantBtn = document.getElementById('create-assistant-btn');
+    const deleteAssistantBtn = document.getElementById('delete-assistant-btn');
     const assistantNameEl = document.getElementById('assistant-name');
     const assistantInstructionsEl = document.getElementById('assistant-instructions');
     const selectedDocsEl = document.getElementById('selected-docs');
@@ -136,13 +137,38 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 console.log('Found saved assistant in localStorage:', savedAssistant.id);
                 
+                // Restore assistant state
+                state.assistant = {
+                    id: savedAssistant.id,
+                    name: savedAssistant.name
+                };
+                
+                // Update UI to show active assistant
+                assistantStatusEl.textContent = 'Ready';
+                assistantStatusEl.classList.remove('bg-gray-200', 'text-gray-600');
+                assistantStatusEl.classList.add('bg-green-100', 'text-green-800');
+                
+                // Show delete assistant button
+                deleteAssistantBtn.classList.remove('hidden');
+                
+                // Enable chat functionality
+                chatInputEl.disabled = false;
+                sendMessageBtn.disabled = false;
+                
+                // Reset chat container with welcome message
+                chatContainerEl.innerHTML = `
+                    <div class="assistant-message chat-message">
+                        <p>Welcome back! I'm your Zotero research assistant.</p>
+                        <p class="mt-2">How can I help you today?</p>
+                    </div>
+                `;
+                
                 // If we also have a thread for this assistant, check if it's valid
                 const savedThread = loadThreadFromStorage(savedAssistant.id);
                 if (savedThread) {
                     console.log('Found saved thread in localStorage:', savedThread.threadId);
-                    
-                    // We'll let the conversation restore when the user sends a message
-                    // This helps avoid unnecessary API calls on page load
+                    state.currentThread = savedThread.threadId;
+                    // We'll validate the thread when the user sends a message
                 }
             }
         } catch (error) {
@@ -269,6 +295,79 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             updateSelectedDocsList();
+        });
+
+        // Delete assistant button
+        deleteAssistantBtn.addEventListener('click', async () => {
+            if (!state.assistant || !state.assistant.id) {
+                showAlert('No active assistant to delete');
+                return;
+            }
+
+            // Confirm deletion with the user
+            if (!confirm('Are you sure you want to delete this assistant? This action cannot be undone.')) {
+                return;
+            }
+            
+            // Show loading overlay
+            showLoading('Deleting assistant...');
+            
+            try {
+                // Send the delete request to the backend
+                const response = await fetch(`/api/openai/assistant/${state.assistant.id}`, {
+                    method: 'DELETE'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    console.log('Assistant deleted successfully:', data);
+                    
+                    // Remove assistant from localStorage
+                    try {
+                        localStorage.removeItem('current_assistant');
+                        localStorage.removeItem(`thread_${state.assistant.id}`);
+                    } catch (storageError) {
+                        console.error('Error removing assistant from localStorage:', storageError);
+                    }
+                    
+                    // Reset application state
+                    state.assistant = null;
+                    state.currentThread = null;
+                    state.documentFileIds = {};
+                    
+                    // Update UI to reflect deleted assistant
+                    assistantStatusEl.textContent = 'Not Created';
+                    assistantStatusEl.classList.remove('bg-green-100', 'text-green-800');
+                    assistantStatusEl.classList.add('bg-gray-200', 'text-gray-600');
+                    
+                    // Hide delete button
+                    deleteAssistantBtn.classList.add('hidden');
+                    
+                    // Disable chat input
+                    chatInputEl.disabled = true;
+                    sendMessageBtn.disabled = true;
+                    
+                    // Reset chat container
+                    chatContainerEl.innerHTML = `
+                        <div class="flex items-center justify-center h-full text-gray-400">
+                            Create an assistant to start chatting
+                        </div>
+                    `;
+                    
+                    // Show success message
+                    showAlert('Assistant deleted successfully', 'success');
+                } else {
+                    // Show error message
+                    const errorMsg = data.error || 'Failed to delete assistant';
+                    showAlert(`Error: ${errorMsg}`);
+                }
+            } catch (error) {
+                console.error('Error deleting assistant:', error);
+                showAlert(`Error: ${error.message || 'Unknown error during assistant deletion'}`);
+            } finally {
+                hideLoading();
+            }
         });
 
         // Create assistant button
@@ -478,6 +577,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     assistantStatusEl.classList.remove('bg-gray-200', 'text-gray-600');
                     assistantStatusEl.classList.add('bg-green-100', 'text-green-800');
                     
+                    // Show the delete assistant button
+                    deleteAssistantBtn.classList.remove('hidden');
+                    
                     // Save assistant to localStorage for later restoring
                     try {
                         localStorage.setItem('current_assistant', JSON.stringify({
@@ -614,6 +716,10 @@ This will help me understand what knowledge you have available.`;
                 li.classList.add('active');
                 loadDocuments(collection.key);
                 state.selectedCollection = collection.key;
+                
+                // Auto-populate the Assistant Name field with the name of the selected collection
+                const assistantNameEl = document.getElementById('assistant-name');
+                assistantNameEl.value = collection.data.name;
             });
         });
     }
@@ -767,9 +873,22 @@ This will help me understand what knowledge you have available.`;
             }
             
             // PDF availability badge
-            const pdfBadge = doc.hasPDF 
-                ? '<span class="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full ml-1 whitespace-nowrap">PDF Available</span>'
-                : '<span class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full ml-1 whitespace-nowrap">No PDF</span>';
+            let pdfBadge = '<span class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full ml-1 whitespace-nowrap">No PDF</span>';
+            
+            if (doc.hasPDF) {
+                // Show the number of attachments if there are multiple
+                const pdfCount = doc.pdfAttachments ? doc.pdfAttachments.length : 0;
+                if (pdfCount > 1) {
+                    pdfBadge = `<span class="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full ml-1 whitespace-nowrap">${pdfCount} PDFs</span>`;
+                } else {
+                    pdfBadge = '<span class="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full ml-1 whitespace-nowrap">PDF Available</span>';
+                }
+                
+                // Add tooltip with PDF info if available
+                if (doc.pdfAttachments && doc.pdfAttachments.length > 0) {
+                    docEl.setAttribute('title', `PDF Attachments: ${doc.pdfAttachments.map(att => att.title).join(', ')}`);
+                }
+            }
             
             docEl.innerHTML = `
                 <input type="checkbox" class="mt-1 mr-3 h-5 w-5 text-blue-600 rounded" ${!doc.hasPDF ? 'disabled' : ''} />
