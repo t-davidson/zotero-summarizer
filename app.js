@@ -875,6 +875,8 @@ app.post('/api/openai/validate-thread', async (req, res) => {
   }
 });
 
+// No server control endpoints
+
 // Get all available OpenAI assistants
 app.get('/api/openai/assistants', async (req, res) => {
   try {
@@ -1226,17 +1228,21 @@ const httpsOptions = {
   cert: fs.readFileSync(path.join(__dirname, 'certs', 'server.cert')),
 };
 
+// No auto-browser-open function
+
 // Create HTTPS server
-https.createServer(httpsOptions, app).listen(PORT, () => {
+const server = https.createServer(httpsOptions, app).listen(PORT, () => {
   console.log(`Secure server running on https://localhost:${PORT}`);
   console.log(`Using Zotero account with User ID: ${ZOTERO_USER_ID}`);
 });
 
-// For development convenience, also start an HTTP server that redirects to HTTPS
+// For development convenience, also start an HTTP server that redirects to HTTPS (hidden from documentation)
 const httpApp = express();
 httpApp.use((req, res) => {
   res.redirect(`https://localhost:${PORT}${req.url}`);
 });
-httpApp.listen(PORT + 1, () => {
+const httpServer = httpApp.listen(PORT + 1, () => {
   console.log(`HTTP redirect server running on http://localhost:${PORT + 1}`);
 });
+
+// No server export for control endpoints

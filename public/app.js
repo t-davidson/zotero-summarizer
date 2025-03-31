@@ -1669,6 +1669,8 @@ This will help me understand what knowledge you have available.`;
         }, 3000);
     }
 
+    // Initialize the app with no server control buttons
+
     // Initialize the app
     initApp();
 });
