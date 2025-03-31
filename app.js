@@ -5,6 +5,7 @@ const axios = require('axios');
 const OpenAI = require('openai');
 const fs = require('fs');
 const cors = require('cors');
+const https = require('https');
 require('dotenv').config();
 
 // Setup logging
@@ -1219,8 +1220,23 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// SSL/TLS Certificate options
+const httpsOptions = {
+  key: fs.readFileSync(path.join(__dirname, 'certs', 'server.key')),
+  cert: fs.readFileSync(path.join(__dirname, 'certs', 'server.cert')),
+};
+
+// Create HTTPS server
+https.createServer(httpsOptions, app).listen(PORT, () => {
+  console.log(`Secure server running on https://localhost:${PORT}`);
   console.log(`Using Zotero account with User ID: ${ZOTERO_USER_ID}`);
+});
+
+// For development convenience, also start an HTTP server that redirects to HTTPS
+const httpApp = express();
+httpApp.use((req, res) => {
+  res.redirect(`https://localhost:${PORT}${req.url}`);
+});
+httpApp.listen(PORT + 1, () => {
+  console.log(`HTTP redirect server running on http://localhost:${PORT + 1}`);
 });
