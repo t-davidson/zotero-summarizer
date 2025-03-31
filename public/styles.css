@@ -122,3 +122,122 @@
     background-color: #fee2e2;
     border-left: 3px solid #ef4444;
 }
+
+/* Dark Mode Styles */
+.dark .spinner {
+    border-color: rgba(255, 255, 255, 0.1);
+    border-left-color: #60a5fa;
+}
+
+.dark .spinner-small {
+    border-color: rgba(255, 255, 255, 0.1);
+    border-left-color: #60a5fa;
+}
+
+.dark .progress-container {
+    background-color: #374151;
+}
+
+.dark .progress-label {
+    color: #d1d5db;
+}
+
+.dark .collection-item:hover {
+    background-color: #374151;
+}
+
+.dark .collection-item.active {
+    background-color: #1e3a8a;
+    border-left-color: #3b82f6;
+}
+
+.dark .document-item:hover {
+    background-color: #374151;
+}
+
+.dark .document-item.selected {
+    background-color: #312e81;
+    border-left-color: #818cf8;
+}
+
+.dark .chat-message {
+    color: #f3f4f6;
+}
+
+.dark .user-message {
+    background-color: #4b5563;
+}
+
+.dark .assistant-message {
+    background-color: #1e40af;
+}
+
+.dark .system-message {
+    background-color: #374151;
+    color: #d1d5db;
+}
+
+.dark .chat-message.error {
+    background-color: #7f1d1d;
+    border-left-color: #f87171;
+    color: #fecaca;
+}
+
+/* Dark mode for UI components */
+.dark {
+    color-scheme: dark;
+}
+
+.dark .bg-white {
+    background-color: #1f2937 !important;
+}
+
+.dark.bg-gray-50, .dark .bg-gray-50 {
+    background-color: #111827 !important;
+}
+
+.dark .bg-gray-100 {
+    background-color: #1f2937 !important;
+}
+
+.dark .text-gray-800 {
+    color: #f9fafb !important;
+}
+
+.dark .text-gray-700 {
+    color: #f3f4f6 !important;
+}
+
+.dark .text-gray-600 {
+    color: #e5e7eb !important;
+}
+
+.dark .text-gray-500 {
+    color: #d1d5db !important;
+}
+
+.dark .text-gray-400 {
+    color: #9ca3af !important;
+}
+
+.dark .border {
+    border-color: #374151 !important;
+}
+
+.dark .border-gray-200 {
+    border-color: #374151 !important;
+}
+
+.dark .shadow {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+}
+
+.dark input, .dark select, .dark textarea {
+    background-color: #374151 !important;
+    color: #f3f4f6 !important;
+    border-color: #4b5563 !important;
+}
+
+.dark input::placeholder, .dark textarea::placeholder {
+    color: #9ca3af !important;
+}

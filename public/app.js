@@ -32,6 +32,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const assistantDetailFilesEl = document.getElementById('assistant-detail-files');
     const assistantDetailInstructionsEl = document.getElementById('assistant-detail-instructions');
     
+    // Load panel elements
+    const toggleLoadPanelBtn = document.getElementById('toggle-load-panel-btn');
+    const loadPanelToggleIcon = document.getElementById('load-panel-toggle-icon');
+    const loadAssistantContent = document.getElementById('load-assistant-content');
+    
+    // Dark mode toggle
+    const darkModeToggle = document.getElementById('dark-mode-toggle');
+    const lightIcon = document.getElementById('light-icon');
+    const darkIcon = document.getElementById('dark-icon');
+    
     // Hide the settings button since we're using env vars now
     const settingsBtnEl = document.getElementById('settings-btn');
     if (settingsBtnEl) {
@@ -53,9 +63,32 @@ document.addEventListener('DOMContentLoaded', () => {
         // UI state
         configPanelMinimized: false,
         searchQuery: '',
+        darkMode: false,
         // Flag to indicate if we're trying to recover a thread
         isRecoveringThread: false
     };
+    
+    // Initialize dark mode from local storage
+    function initDarkMode() {
+        // Check if user has a saved preference
+        const savedDarkMode = localStorage.getItem('darkMode');
+        
+        // Apply dark mode if saved as true
+        if (savedDarkMode === 'true') {
+            document.documentElement.classList.add('dark');
+            document.body.classList.add('dark');
+            lightIcon.classList.remove('hidden');
+            darkIcon.classList.add('hidden');
+            state.darkMode = true;
+        } else {
+            // Default to light mode
+            document.documentElement.classList.remove('dark');
+            document.body.classList.remove('dark');
+            lightIcon.classList.add('hidden');
+            darkIcon.classList.remove('hidden');
+            state.darkMode = false;
+        }
+    }
 
     // Thread management with localStorage
     
@@ -290,11 +323,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Set up event listeners
         setupEventListeners();
         
+        // Initialize dark mode from saved preference
+        initDarkMode();
+        
         // Load collections automatically on page load
         loadCollections();
-        
-        // Load existing assistants
-        loadExistingAssistants();
         
         // Auto-load saved assistant and thread if available
         try {
@@ -351,6 +384,18 @@ document.addEventListener('DOMContentLoaded', () => {
             loadCollections();
         });
         
+        // Toggle load panel
+        toggleLoadPanelBtn.addEventListener('click', () => {
+            loadAssistantContent.classList.toggle('hidden');
+            if (loadAssistantContent.classList.contains('hidden')) {
+                loadPanelToggleIcon.textContent = '▼';
+            } else {
+                loadPanelToggleIcon.textContent = '▲';
+                // Load assistants when panel is opened
+                loadExistingAssistants();
+            }
+        });
+        
         // Load existing assistants
         refreshAssistantsBtnEl.addEventListener('click', () => {
             loadExistingAssistants();
@@ -366,6 +411,20 @@ document.addEventListener('DOMContentLoaded', () => {
         // Load assistant button
         loadAssistantBtnEl.addEventListener('click', () => {
             loadSelectedAssistant();
+        });
+        
+        // Dark mode toggle
+        darkModeToggle.addEventListener('click', () => {
+            document.documentElement.classList.toggle('dark');
+            document.body.classList.toggle('dark');
+            
+            // Toggle icons
+            lightIcon.classList.toggle('hidden');
+            darkIcon.classList.toggle('hidden');
+            
+            // Save preference
+            const isDarkMode = document.body.classList.contains('dark');
+            localStorage.setItem('darkMode', isDarkMode ? 'true' : 'false');
         });
         
         // Add search input for documents
@@ -489,8 +548,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Confirm deletion with the user
-            if (!confirm('Are you sure you want to delete this assistant? This action cannot be undone.')) {
+            // Show double confirmation dialog
+            if (!confirm(`Are you sure you want to delete the assistant "${state.assistant.name || 'Unnamed'}"?`)) {
+                return;
+            }
+            
+            // Second confirmation for safety
+            if (!confirm('This action CANNOT be undone. Confirm deletion?')) {
                 return;
             }
             

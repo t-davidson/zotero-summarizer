@@ -7,16 +7,28 @@
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
-<body class="bg-gray-50 min-h-screen">
-    <div class="container mx-auto px-4 py-8">
+<body class="bg-gray-50 dark:bg-gray-900 min-h-screen transition-colors duration-200 ease-in-out">
+    <!-- Dark Mode Toggle Button (fixed to the top right) -->
+    <button id="dark-mode-toggle" class="fixed top-4 right-4 z-50 bg-white dark:bg-gray-800 p-2 rounded-full shadow-lg">
+        <!-- Sun Icon (shown in dark mode) -->
+        <svg id="light-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-yellow-500 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+        <!-- Moon Icon (shown in light mode) -->
+        <svg id="dark-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+    </button>
+
+    <div class="container mx-auto px-4 py-8 transition-colors duration-200 ease-in-out">
         <!-- Header -->
         <header class="flex flex-col md:flex-row justify-between items-center mb-8">
             <div>
-                <h1 class="text-3xl font-bold text-gray-800">Zotero-OpenAI PDF Assistant</h1>
-                <p class="text-gray-600">Create an AI assistant from your Zotero library</p>
+                <h1 class="text-3xl font-bold text-gray-800 dark:text-gray-100">Zotero-OpenAI PDF Assistant</h1>
+                <p class="text-gray-600 dark:text-gray-400">Create an AI assistant from your Zotero library</p>
             </div>
             <div class="flex space-x-4 mt-4 md:mt-0">
-                <button id="refresh-btn" class="bg-white px-4 py-2 rounded shadow hover:bg-gray-100 flex items-center gap-2">
+                <button id="refresh-btn" class="bg-white dark:bg-gray-700 px-4 py-2 rounded shadow hover:bg-gray-100 dark:hover:bg-gray-600 flex items-center gap-2 dark:text-white">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
@@ -113,18 +125,23 @@
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="text-xl font-semibold text-gray-800">Load Existing Assistant</h2>
                         <div>
-                            <button id="refresh-assistants-btn" class="text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                </svg>
-                                Refresh
+                            <button id="toggle-load-panel-btn" class="text-gray-600 hover:text-gray-800 p-1 rounded">
+                                <span id="load-panel-toggle-icon">▲</span>
                             </button>
                         </div>
                     </div>
-                    <div class="border-t border-gray-200 pt-4">
+                    <div id="load-assistant-content" class="border-t border-gray-200 pt-4 hidden">
                         <div class="space-y-4">
+                            <div class="flex justify-between items-center">
+                                <label class="block text-sm font-medium text-gray-700" for="existing-assistants">Select Assistant</label>
+                                <button id="refresh-assistants-btn" class="text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                    Refresh
+                                </button>
+                            </div>
                             <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1" for="existing-assistants">Select Assistant</label>
                                 <select id="existing-assistants" class="w-full p-2 border rounded">
                                     <option value="">Loading assistants...</option>
                                 </select>
