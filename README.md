@@ -1,6 +1,6 @@
 # Zotero-Summarizer
 
-A tool for creating AI assistants from your Zotero library to help analyze and summarize academic papers.
+A tool for creating AI assistants from your Zotero library to help analyze and summarize academic papers. This tool allows you to select PDFs from a collection and create a customized assistant using the files as its knowledge base.
 
 ## ⚠️ Important Requirements and Warnings
 
