@@ -858,13 +858,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     
                     // Send an initial prompt to ask the assistant to describe its knowledge
                     setTimeout(() => {
-                        const initialPrompt = `I've shared ${state.selectedDocuments.length} academic papers with you. Please:
-1. Tell me the titles and authors of each paper you can access
-2. For each paper, give me a brief (2-3 sentence) summary of its main topic and key findings
-3. Let me know if any files appear to be incomplete or if you're having trouble accessing them
-4. Suggest 2-3 interesting research questions I could ask you based on these papers
-
-This will help me understand what knowledge you have available.`;
+                        const initialPrompt = `I've shared ${state.selectedDocuments.length} academic papers with you. Please provide a simple one paragraph summary of each paper that includes its title, authors, and main findings or contributions.`;
                         
                         // Add a typing indicator 
                         const typingIndicator = document.createElement('div');
